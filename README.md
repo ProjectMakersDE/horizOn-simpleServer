@@ -26,6 +26,61 @@ Built for indie game developers and small studios who want full control over the
 - Per-IP rate limiting
 - SQLite (zero-config) or MySQL support
 
+## Simple Server vs. horizOn BaaS
+
+This table compares the self-hosted Simple Server with the fully managed [horizOn](https://horizon.pm) Backend-as-a-Service.
+
+| Feature | Simple Server | horizOn BaaS |
+|---|:---:|:---:|
+| **Authentication** | | |
+| Anonymous auth | :white_check_mark: | :white_check_mark: |
+| Email / password auth | :x: | :white_check_mark: |
+| Google Sign-In (OAuth) | :x: | :white_check_mark: |
+| Account linking (multiple auth methods) | :x: | :white_check_mark: |
+| Email verification & password reset | :x: | :white_check_mark: |
+| **Leaderboards** | | |
+| Submit, top, rank, around | :white_check_mark: | :white_check_mark: |
+| Anti-cheat metadata | :x: | :white_check_mark: |
+| Leaderboard statistics & management | :x: | :white_check_mark: |
+| **Cloud Saves** | | |
+| Save & load | :white_check_mark: (300 KB) | :white_check_mark: (tier-based limits) |
+| **Remote Config** | | |
+| Key-value store | :white_check_mark: | :white_check_mark: |
+| **News** | | |
+| News with language filtering | :white_check_mark: | :white_check_mark: |
+| **Gift Codes** | | |
+| Validate & redeem | :white_check_mark: | :white_check_mark: |
+| **User Feedback** | | |
+| Feedback submission | :white_check_mark: | :white_check_mark: |
+| **User Logs** | | |
+| INFO / WARN / ERROR | :white_check_mark: | :white_check_mark: |
+| **Crash Reporting** | | |
+| Crash report submission | :white_check_mark: | :white_check_mark: |
+| Session tracking & breadcrumbs | :white_check_mark: | :white_check_mark: |
+| Crash group management & statistics | :x: | :white_check_mark: |
+| **Admin & Dashboard** | | |
+| Web dashboard | :x: | :white_check_mark: |
+| User management UI | :x: | :white_check_mark: |
+| API key management | :x: | :white_check_mark: |
+| **Analytics & Monitoring** | | |
+| Event tracking (GA4, Meta Pixel) | :x: | :white_check_mark: |
+| Performance monitoring | :x: | :white_check_mark: |
+| **Community & Support** | | |
+| Discord integration & role sync | :x: | :white_check_mark: |
+| Support ticket system | :x: | :white_check_mark: |
+| Blog / CMS | :x: | :white_check_mark: |
+| Admin banners (scheduled, multi-language) | :x: | :white_check_mark: |
+| **Billing & Scaling** | | |
+| Subscription management (Stripe) | :x: | :white_check_mark: |
+| Tier-based rate limiting & quotas | :x: | :white_check_mark: |
+| **Infrastructure** | | |
+| Self-hosted | :white_check_mark: | :x: |
+| Zero dependencies (no Docker/Java) | :white_check_mark: | :x: |
+| SQLite support | :white_check_mark: | :x: |
+| Runs on shared PHP hosting | :white_check_mark: | :x: |
+
+> **SDK compatibility:** Both versions use the same API contract, so you can switch between Simple Server and horizOn BaaS without changing your game code.
+
 ## Quick Start
 
 ```bash
