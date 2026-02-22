@@ -1,0 +1,22 @@
+# horizOn Simple Server - Nginx Configuration Example
+#
+# Place this inside your server {} block or adapt to your setup.
+
+location / {
+    try_files $uri $uri/ /index.php?$query_string;
+}
+
+location ~ \.php$ {
+    fastcgi_pass unix:/var/run/php/php-fpm.sock;
+    fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+    include fastcgi_params;
+}
+
+# Deny access to sensitive files
+location ~ /\.(env|git|htaccess) {
+    deny all;
+}
+
+location ~ ^/(src|migrations|docs|data)/ {
+    deny all;
+}
