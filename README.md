@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://horizon.pm">
+    <img src="https://horizon.pm/media/images/og-image.png" alt="horizOn - Game Backend & Live-Ops Dashboard" />
+  </a>
+</p>
+
 # horizOn Simple Server
 
 A lightweight, self-hostable PHP backend server — the **free, open-source edition** of the [horizOn](https://horizon.pm) game backend. Drop it on any PHP hosting and you have a fully functional backend for your game in minutes.
