@@ -1,6 +1,8 @@
 # horizOn Simple Server
 
-A lightweight, self-hostable PHP backend server as an open-source drop-in replacement for the [horizOn](https://github.com/nicordev/horizOn) backend. Built for indie game developers and small studios who want full control over their game backend without the complexity of a full cloud solution.
+A lightweight, self-hostable PHP backend server — the **free, open-source edition** of the [horizOn](https://horizon.pm) game backend. Drop it on any PHP hosting and you have a fully functional backend for your game in minutes.
+
+Built for indie game developers and small studios who want full control over their backend without cloud costs or vendor lock-in. Fully API-compatible with the horizOn SDKs (Unity, Godot, Unreal).
 
 **No Composer. No frameworks. No external dependencies.** Just PHP 7.4+ and a database.
 
@@ -22,7 +24,7 @@ A lightweight, self-hostable PHP backend server as an open-source drop-in replac
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/nicordev/horizOn-simpleServer.git
+git clone https://github.com/ProjectMakersDE/horizOn-simpleServer.git
 cd horizOn-simpleServer
 
 # 2. Copy and edit the environment file
@@ -250,6 +252,17 @@ horizOn-simpleServer/
 └── data/                      # SQLite database (auto-created)
 ```
 
+## Why This Exists
+
+[horizOn](https://horizon.pm) is a managed game backend service. This Simple Server is the self-hosted, open-source alternative for developers who:
+
+- Need a free backend for prototyping or small projects
+- Want to own their infrastructure and data
+- Are on shared PHP hosting and can't run Java/Docker
+- Want a fallback if the managed service is unavailable
+
+The Simple Server implements the same API as the managed service, so you can start here and migrate to horizOn later (or vice versa) without changing your game code.
+
 ## License
 
-MIT
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
