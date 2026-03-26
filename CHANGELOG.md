@@ -1,3 +1,10 @@
+## [1.0.1](https://github.com/ProjectMakersDE/horizOn-simpleServer/compare/v1.0.0...v1.0.1) (2026-03-26)
+
+
+### Bug Fixes
+
+* move commit command to parent workspace root ([a951844](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/a95184434be9c9b66e12c5863697735eb8a3c0bf))
+
 # 1.0.0 (2026-02-22)
 
 
