@@ -132,3 +132,36 @@ CREATE TABLE IF NOT EXISTS rate_limits (
     request_count INT NOT NULL DEFAULT 1,
     window_start INT NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Email Sending
+
+CREATE TABLE IF NOT EXISTS email_templates (
+    id CHAR(36) PRIMARY KEY,
+    slug VARCHAR(100) NOT NULL,
+    name VARCHAR(200) NOT NULL,
+    subject TEXT NOT NULL,
+    body MEDIUMTEXT NOT NULL,
+    variables TEXT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    deleted TINYINT(1) NOT NULL DEFAULT 0,
+    UNIQUE KEY idx_email_templates_slug (slug)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS email_queue (
+    id CHAR(36) PRIMARY KEY,
+    account_id CHAR(36) NOT NULL DEFAULT 'default',
+    template_id CHAR(36) NOT NULL,
+    user_id CHAR(36) NOT NULL,
+    variables TEXT NOT NULL,
+    language VARCHAR(10) NOT NULL DEFAULT 'en',
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    error_reason TEXT,
+    scheduled_at DATETIME,
+    processed_at DATETIME,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_email_queue_status_scheduled (status, scheduled_at),
+    INDEX idx_email_queue_user_status (user_id, status),
+    FOREIGN KEY (template_id) REFERENCES email_templates(id),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

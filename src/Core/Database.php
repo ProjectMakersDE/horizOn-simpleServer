@@ -53,6 +53,35 @@ class Database
 
         $sql = file_get_contents($file);
         $pdo->exec($sql);
+
+        // Add email column to users table if it doesn't exist (for Email Sending)
+        self::addColumnIfNotExists($pdo, $driver, 'users', 'email', 'TEXT', 'VARCHAR(254)');
+    }
+
+    private static function addColumnIfNotExists(PDO $pdo, string $driver, string $table, string $column, string $sqliteType, string $mysqlType): void
+    {
+        try {
+            if ($driver === 'sqlite') {
+                $cols = $pdo->query("PRAGMA table_info({$table})")->fetchAll();
+                foreach ($cols as $col) {
+                    if ($col['name'] === $column) {
+                        return;
+                    }
+                }
+                $pdo->exec("ALTER TABLE {$table} ADD COLUMN {$column} {$sqliteType}");
+            } else {
+                $stmt = $pdo->prepare(
+                    "SELECT COUNT(*) as cnt FROM information_schema.COLUMNS
+                     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?"
+                );
+                $stmt->execute([$table, $column]);
+                if ((int)$stmt->fetch()['cnt'] === 0) {
+                    $pdo->exec("ALTER TABLE {$table} ADD COLUMN {$column} {$mysqlType}");
+                }
+            }
+        } catch (\Throwable $e) {
+            error_log("horizOn migration notice: " . $e->getMessage());
+        }
     }
 
     public static function uuid(): string

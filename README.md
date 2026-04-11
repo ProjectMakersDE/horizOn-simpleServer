@@ -23,6 +23,7 @@ Built for indie game developers and small studios who want full control over the
 - User feedback collection
 - User log ingestion (INFO, WARN, ERROR)
 - Crash reporting with automatic grouping, fingerprinting, and regression detection
+- Email sending with template-based delivery and scheduled emails
 - Per-IP rate limiting
 - SQLite (zero-config) or MySQL support
 
@@ -58,6 +59,11 @@ This table compares the self-hosted Simple Server with the fully managed [horizO
 | Crash report submission | :white_check_mark: | :white_check_mark: |
 | Session tracking & breadcrumbs | :white_check_mark: | :white_check_mark: |
 | Crash group management & statistics | :x: | :white_check_mark: |
+| **Email Sending** | | |
+| Template-based email delivery | :white_check_mark: | :white_check_mark: |
+| Scheduled emails | :white_check_mark: | :white_check_mark: |
+| Automatic template translation | :x: | :white_check_mark: |
+| SMTP connection pooling | :x: | :white_check_mark: |
 | **Admin & Dashboard** | | |
 | Web dashboard | :x: | :white_check_mark: |
 | User management UI | :x: | :white_check_mark: |
@@ -181,6 +187,77 @@ All endpoints are prefixed with `/api/v1/app`. Except for `/health`, all endpoin
 | POST | `/crash-reports/session` | Register an app session |
 | POST | `/crash-reports/create` | Submit a crash report |
 
+### Email Sending
+
+| Method | Endpoint | Description |
+|---|---|---|
+| POST | `/email-sending/send` | Send or schedule an email to a user |
+| DELETE | `/email-sending/{emailId}` | Cancel a pending email |
+| GET | `/email-sending/{emailId}` | Get email status |
+| POST | `/email-sending/ticker` | Process pending emails (cron endpoint) |
+
+## Email Sending Setup
+
+The Email Sending feature lets your app send template-based transactional emails to registered users via your own SMTP server. Templates and SMTP credentials are stored in the local database.
+
+### 1. Configure SMTP Credentials
+
+SMTP credentials are stored in the `remote_configs` table with the key `smtp_config`. Insert a JSON object with your SMTP server details:
+
+```sql
+-- SQLite
+INSERT INTO remote_configs (config_key, config_value) VALUES ('smtp_config', '{
+  "host": "smtp.example.com",
+  "port": 587,
+  "username": "your-smtp-user",
+  "password": "your-smtp-password",
+  "from_email": "noreply@example.com",
+  "from_name": "My Game",
+  "encryption": "tls"
+}');
+```
+
+Supported `encryption` values: `tls` (port 587), `ssl` (port 465), or `none` (port 25).
+
+### 2. Create Email Templates
+
+Templates are stored in the `email_templates` table. Subject and body support multiple languages via JSON maps, and variables use `{{variableName}}` syntax:
+
+```sql
+INSERT INTO email_templates (id, slug, name, subject, body, variables) VALUES (
+  'your-uuid-here',
+  'welcome',
+  'Welcome Email',
+  '{"en": "Welcome, {{username}}!", "de": "Willkommen, {{username}}!"}',
+  '{"en": "<h1>Welcome!</h1><p>Hello {{username}}, thanks for joining.</p>", "de": "<h1>Willkommen!</h1><p>Hallo {{username}}, danke fürs Mitmachen.</p>"}',
+  '["username"]'
+);
+```
+
+### 3. Add Email Addresses to Users
+
+The `users` table has an `email` column (added automatically by migration). Update your users with their email addresses:
+
+```sql
+UPDATE users SET email = 'player@example.com' WHERE id = 'user-uuid';
+```
+
+### 4. Set Up Cron Job for Ticker
+
+The ticker endpoint processes pending and scheduled emails. Set up a cron job to call it regularly (every 5 minutes recommended):
+
+```bash
+# Add to crontab (crontab -e)
+*/5 * * * * curl -s -X POST -H "X-API-Key: YOUR_API_KEY" http://localhost:8080/api/v1/app/email-sending/ticker > /dev/null 2>&1
+```
+
+If you use `wget` instead:
+```bash
+*/5 * * * * wget -q --method=POST --header="X-API-Key: YOUR_API_KEY" -O /dev/null http://localhost:8080/api/v1/app/email-sending/ticker 2>&1
+```
+
+Without the cron job, emails will remain in `pending` status and never be sent.
+
 ## Deployment
 
 ### PHP Built-in Server (Development)
@@ -294,6 +371,7 @@ horizOn-simpleServer/
 │   │   └── Router.php        # URL pattern matching
 │   ├── CloudSave/
 │   ├── CrashReporting/
+│   ├── EmailSending/
 │   ├── GiftCodes/
 │   ├── Leaderboard/
 │   ├── News/

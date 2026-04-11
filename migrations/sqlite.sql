@@ -133,3 +133,38 @@ CREATE TABLE IF NOT EXISTS rate_limits (
     request_count INTEGER NOT NULL DEFAULT 1,
     window_start INTEGER NOT NULL
 );
+
+-- Email Sending
+
+CREATE TABLE IF NOT EXISTS email_templates (
+    id TEXT PRIMARY KEY,
+    slug TEXT NOT NULL,
+    name TEXT NOT NULL,
+    subject TEXT NOT NULL DEFAULT '{}',
+    body TEXT NOT NULL DEFAULT '{}',
+    variables TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    deleted INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_email_templates_slug ON email_templates(slug) WHERE deleted = 0;
+
+CREATE TABLE IF NOT EXISTS email_queue (
+    id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL DEFAULT 'default',
+    template_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    variables TEXT NOT NULL DEFAULT '{}',
+    language TEXT NOT NULL DEFAULT 'en',
+    status TEXT NOT NULL DEFAULT 'pending',
+    error_reason TEXT,
+    scheduled_at TEXT,
+    processed_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (template_id) REFERENCES email_templates(id),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_email_queue_status_scheduled ON email_queue(status, scheduled_at);
+CREATE INDEX IF NOT EXISTS idx_email_queue_user_status ON email_queue(user_id, status);

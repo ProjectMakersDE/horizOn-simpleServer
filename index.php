@@ -43,6 +43,7 @@ require_once $baseDir . '/src/GiftCodes/GiftCodesController.php';
 require_once $baseDir . '/src/UserFeedback/UserFeedbackController.php';
 require_once $baseDir . '/src/UserLogs/UserLogsController.php';
 require_once $baseDir . '/src/CrashReporting/CrashReportingController.php';
+require_once $baseDir . '/src/EmailSending/EmailSendingController.php';
 
 // Initialize
 $envPath = $baseDir . '/.env';
@@ -107,6 +108,12 @@ $router->post($prefix . '/user-logs/create', [UserLogsController::class, 'create
 // --- Crash Reporting ---
 $router->post($prefix . '/crash-reports/create', [CrashReportingController::class, 'create']);
 $router->post($prefix . '/crash-reports/session', [CrashReportingController::class, 'session']);
+
+// --- Email Sending ---
+$router->post($prefix . '/email-sending/send', [EmailSendingController::class, 'send']);
+$router->delete($prefix . '/email-sending/{emailId}', [EmailSendingController::class, 'cancel']);
+$router->get($prefix . '/email-sending/{emailId}', [EmailSendingController::class, 'status']);
+$router->post($prefix . '/email-sending/ticker', [EmailSendingController::class, 'ticker']);
 
 // Dispatch
 $router->dispatch($request);
