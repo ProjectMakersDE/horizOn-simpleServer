@@ -6,11 +6,57 @@ class UserManagementController
 {
     public static function signup(Request $request): void
     {
+        // --- Apple Sign-In path ---
+        $appleToken = (string)$request->body('appleIdentityToken', '');
+        if ($appleToken !== '') {
+            $firstName = self::stringOrNull($request->body('appleFirstName'));
+            $lastName = self::stringOrNull($request->body('appleLastName'));
+            $result = AppleSignInController::authenticate($appleToken, $firstName, $lastName);
+
+            if ($result['authStatus'] !== 'AUTHENTICATED') {
+                Response::json([
+                    'userId' => null,
+                    'username' => null,
+                    'email' => null,
+                    'isAnonymous' => false,
+                    'isVerified' => false,
+                    'anonymousToken' => null,
+                    'appleUserId' => null,
+                    'isPrivateRelayEmail' => false,
+                    'googleId' => null,
+                    'authStatus' => $result['authStatus'],
+                    'message' => $result['message'] ?? null,
+                    'createdAt' => null,
+                ]);
+                return;
+            }
+
+            $user = $result['user'];
+            $status = !empty($result['created']) ? 201 : 200;
+            Response::json([
+                'userId' => $user['id'],
+                'username' => $user['display_name'],
+                'email' => $user['email'],
+                'isAnonymous' => false,
+                'isVerified' => true,
+                'anonymousToken' => null,
+                'appleUserId' => $user['apple_user_id'],
+                'isPrivateRelayEmail' => (bool)$user['is_private_relay_email'],
+                'googleId' => null,
+                'accessToken' => $result['accessToken'],
+                'authStatus' => 'AUTHENTICATED',
+                'message' => null,
+                'createdAt' => Database::now(),
+            ], $status);
+            return;
+        }
+
+        // --- Anonymous signup path (existing behaviour) ---
         $type = $request->body('type');
         $username = $request->body('username', '');
 
         if ($type !== 'ANONYMOUS') {
-            Response::badRequest('Only ANONYMOUS signup is supported by this server');
+            Response::badRequest('Only ANONYMOUS signup is supported by this server (or provide appleIdentityToken)');
             return;
         }
 
@@ -34,6 +80,8 @@ class UserManagementController
             'isAnonymous' => true,
             'isVerified' => false,
             'anonymousToken' => $anonymousToken,
+            'appleUserId' => null,
+            'isPrivateRelayEmail' => false,
             'googleId' => null,
             'message' => null,
             'createdAt' => $now,
@@ -42,11 +90,45 @@ class UserManagementController
 
     public static function signin(Request $request): void
     {
+        // --- Apple Sign-In path ---
+        $appleToken = (string)$request->body('appleIdentityToken', '');
+        if ($appleToken !== '') {
+            $result = AppleSignInController::authenticate($appleToken, null, null);
+
+            if ($result['authStatus'] !== 'AUTHENTICATED') {
+                Response::json([
+                    'userId' => null,
+                    'username' => null,
+                    'email' => null,
+                    'accessToken' => null,
+                    'appleUserId' => null,
+                    'isPrivateRelayEmail' => false,
+                    'authStatus' => $result['authStatus'],
+                    'message' => $result['message'] ?? null,
+                ]);
+                return;
+            }
+
+            $user = $result['user'];
+            Response::json([
+                'userId' => $user['id'],
+                'username' => $user['display_name'],
+                'email' => $user['email'],
+                'accessToken' => $result['accessToken'],
+                'appleUserId' => $user['apple_user_id'],
+                'isPrivateRelayEmail' => (bool)$user['is_private_relay_email'],
+                'authStatus' => 'AUTHENTICATED',
+                'message' => null,
+            ]);
+            return;
+        }
+
+        // --- Anonymous signin path (existing behaviour) ---
         $type = $request->body('type');
         $anonymousToken = $request->body('anonymousToken', '');
 
         if ($type !== 'ANONYMOUS') {
-            Response::badRequest('Only ANONYMOUS signin is supported by this server');
+            Response::badRequest('Only ANONYMOUS signin is supported by this server (or provide appleIdentityToken)');
             return;
         }
 
@@ -140,5 +222,14 @@ class UserManagementController
             'authStatus' => 'AUTHENTICATED',
             'message' => null,
         ]);
+    }
+
+    private static function stringOrNull($value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+        $str = trim((string)$value);
+        return $str === '' ? null : $str;
     }
 }

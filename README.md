@@ -15,6 +15,7 @@ Built for indie game developers and small studios who want full control over the
 ## Features
 
 - Anonymous user authentication with session management
+- Apple Sign-In (iOS / Web) with local JWT verification and JWKS caching
 - Global leaderboards (submit, top, rank, around)
 - Cloud save data (up to 300KB per user)
 - Remote configuration key-value store
@@ -37,6 +38,7 @@ This table compares the self-hosted Simple Server with the fully managed [horizO
 | Anonymous auth | :white_check_mark: | :white_check_mark: |
 | Email / password auth | :x: | :white_check_mark: |
 | Google Sign-In (OAuth) | :x: | :white_check_mark: |
+| Apple Sign-In | :white_check_mark: | :white_check_mark: |
 | Account linking (multiple auth methods) | :x: | :white_check_mark: |
 | Email verification & password reset | :x: | :white_check_mark: |
 | **Leaderboards** | | |
@@ -113,6 +115,10 @@ All configuration is done via the `.env` file. Copy `.env.example` to `.env` and
 | `DB_PASS` | *(empty)* | MySQL password (MySQL only) |
 | `RATE_LIMIT_ENABLED` | `true` | Enable per-IP rate limiting |
 | `RATE_LIMIT_PER_SECOND` | `10` | Maximum requests per second per IP |
+| `APPLE_SIGN_IN_ENABLED` | `false` | Enable Apple Sign-In (see "Apple Sign-In Self-Hosted Setup") |
+| `APPLE_TEAM_ID` | *(empty)* | 10-character Apple Team ID |
+| `APPLE_SERVICE_ID` | *(empty)* | Apple Services ID — used as `aud` for web logins |
+| `APPLE_BUNDLE_ID` | *(empty)* | Apple Bundle ID — used as `aud` for native iOS logins |
 
 ## API Endpoints
 
@@ -128,9 +134,15 @@ All endpoints are prefixed with `/api/v1/app`. Except for `/health`, all endpoin
 
 | Method | Endpoint | Description |
 |---|---|---|
-| POST | `/user-management/signup` | Create a new anonymous user |
-| POST | `/user-management/signin` | Sign in with anonymous token |
+| POST | `/user-management/signup` | Create a new anonymous user (or Apple user via `appleIdentityToken`) |
+| POST | `/user-management/signin` | Sign in with anonymous token (or Apple via `appleIdentityToken`) |
 | POST | `/user-management/check-auth` | Verify session validity |
+
+### Apple Sign-In (Public)
+
+| Method | Endpoint | Description |
+|---|---|---|
+| POST | `/api/v1/public/auth/apple` | Log in / register a user with an Apple identity token (no API key) |
 
 ### Leaderboard
 
@@ -257,6 +269,137 @@ If you use `wget` instead:
 ```
 
 Without the cron job, emails will remain in `pending` status and never be sent.
+
+## Apple Sign-In Self-Hosted Setup
+
+Apple Sign-In lets your players log in with their Apple ID on iOS, macOS, and Web. The Simple Server validates Apple identity tokens locally against Apple's public keys — no extra backend service required.
+
+Because Simple Server is **single-tenant**, Apple credentials live in your `.env` file rather than a database table. There is no admin dashboard — all configuration is file-based.
+
+### 1. Enroll in the Apple Developer Program
+
+Apple Sign-In requires a paid Apple Developer Program membership ($99/year). Sign up at [developer.apple.com/programs](https://developer.apple.com/programs/).
+
+### 2. Create an App ID and/or Services ID
+
+In the Apple Developer portal (Certificates, IDs & Profiles → Identifiers):
+
+- **For native iOS apps:** create an App ID, note the **Bundle ID** (e.g. `com.yourcompany.yourapp`), and enable the "Sign In with Apple" capability.
+- **For Web logins:** create a Services ID (e.g. `com.yourcompany.web`). This is the value Apple sends as the `aud` claim in JWTs issued from your web popup flow.
+- **Team ID:** find your 10-character Team ID at the top of [Apple Developer Account Membership](https://developer.apple.com/account/#/membership/).
+
+Apple's official docs: [Configuring Sign in with Apple](https://developer.apple.com/documentation/sign_in_with_apple/configuring_your_environment_for_sign_in_with_apple).
+
+### 3. Verify Your Web Domain (Web Logins Only)
+
+If you use Apple Sign-In on the web, Apple requires domain verification via a well-known file.
+
+1. In the Services ID configuration, click "Configure" next to Sign In with Apple and add your domain and return URL.
+2. Apple generates a verification file; place it on your server at:
+   ```
+   https://yourdomain.com/.well-known/apple-developer-domain-association.txt
+   ```
+3. Click "Verify" in the Apple portal.
+
+Native-only integrations (iOS app without a web fallback) can skip this step.
+
+### 4. Configure `.env`
+
+Add the Apple section to your `.env` (or copy from `.env.example`):
+
+```env
+# Apple Sign-In
+APPLE_SIGN_IN_ENABLED=true
+APPLE_TEAM_ID=ABC1234567
+# Services ID — used as the JWT `aud` for web logins
+APPLE_SERVICE_ID=com.yourcompany.web
+# Bundle ID — used as the JWT `aud` for native iOS logins
+APPLE_BUNDLE_ID=com.yourcompany.yourapp
+```
+
+Both `APPLE_SERVICE_ID` and `APPLE_BUNDLE_ID` are optional individually, but at least one must be set when `APPLE_SIGN_IN_ENABLED=true`. Leave the one you don't use empty.
+
+None of these three identifiers are secrets — they appear in plaintext inside every Apple identity token. No private key (`.p8`) is required for login; that is only needed for advanced features (token revocation, server-to-server notifications) which are not part of this server.
+
+### 5. Restart and Clear Cache
+
+```bash
+# Restart the PHP worker / web server
+# e.g. for php-fpm:
+sudo systemctl restart php-fpm
+
+# Clear the JWKS cache so the next login fetches fresh keys
+rm -rf .cache/
+```
+
+The server automatically creates `.cache/apple-jwks.json` on first login and refreshes it every 24 hours.
+
+### 6. Use Apple Sign-In from a Client
+
+Two entry points are available:
+
+**A. Public endpoint — `POST /api/v1/public/auth/apple`** (no API key)
+
+Intended for dashboard-style logins. Send the Apple identity token obtained from the Apple JS popup:
+
+```http
+POST /api/v1/public/auth/apple
+Content-Type: application/json
+
+{
+  "identityToken": "<Apple JWT>",
+  "firstName": "Jane",
+  "lastName": "Doe"
+}
+```
+
+Response:
+
+```json
+{
+  "accessToken": "<session token>",
+  "user": {
+    "id": "uuid",
+    "email": "jane@privaterelay.appleid.com",
+    "name": "Jane Doe",
+    "appleUserId": "000123.abc...",
+    "isPrivateRelayEmail": true,
+    "isVerified": true
+  },
+  "authStatus": "AUTHENTICATED"
+}
+```
+
+**B. SDK path — extended `/api/v1/app/user-management/signup` and `/signin`** (API key required)
+
+When a request body includes `appleIdentityToken`, the server treats it as an Apple login and creates or signs in the user. Example:
+
+```http
+POST /api/v1/app/user-management/signup
+X-API-Key: <your api key>
+Content-Type: application/json
+
+{
+  "appleIdentityToken": "<Apple JWT>",
+  "appleFirstName": "Jane",
+  "appleLastName": "Doe"
+}
+```
+
+Error responses use `authStatus` for symmetry with horizOn BaaS:
+
+| `authStatus` | Meaning |
+|---|---|
+| `AUTHENTICATED` | Token valid, user logged in or created. |
+| `INVALID_APPLE_TOKEN` | Signature invalid, issuer wrong, audience mismatch, or token expired. |
+| `APPLE_NOT_CONFIGURED` | `APPLE_SIGN_IN_ENABLED=false` or no Services/Bundle ID set. |
+| `APPLE_EMAIL_CONFLICT` | Apple returned a real (non-relay) email that belongs to a different user. |
+
+### Troubleshooting
+
+- **`INVALID_APPLE_TOKEN` right after setup:** double-check that `APPLE_SERVICE_ID` or `APPLE_BUNDLE_ID` exactly matches the `aud` claim Apple puts in the token. Decode the JWT at [jwt.io](https://jwt.io) to inspect.
+- **JWKS cache issues after Apple key rotation:** delete `.cache/apple-jwks.json`; the next request refetches it.
+- **Network restrictions:** the server needs outbound HTTPS to `appleid.apple.com` at least once every 24 hours. Stale cached keys are served as a fallback if the network is briefly unavailable.
 
 ## Deployment
 

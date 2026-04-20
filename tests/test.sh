@@ -52,6 +52,10 @@ DB_DRIVER=sqlite
 DB_PATH=./data/test_horizon_integration.db
 RATE_LIMIT_ENABLED=false
 RATE_LIMIT_PER_SECOND=100
+APPLE_SIGN_IN_ENABLED=false
+APPLE_TEAM_ID=
+APPLE_SERVICE_ID=
+APPLE_BUNDLE_ID=
 EOF
 
 # Clean previous test DB
@@ -419,7 +423,39 @@ assert_contains "crash report returns id" '"id"' "$CRASH_BODY"
 assert_contains "crash report returns groupId" '"groupId"' "$CRASH_BODY"
 assert_contains "crash report returns createdAt" '"createdAt"' "$CRASH_BODY"
 
-# ---- 12. 404 Handling ----
+# ---- 12. Apple Sign-In (disabled + bad token) ----
+echo ""
+echo -e "${BOLD}--- Apple Sign-In ---${NC}"
+
+# With APPLE_SIGN_IN_ENABLED unset, public endpoint returns APPLE_NOT_CONFIGURED.
+APPLE_PUB_URL="http://localhost:${TEST_PORT}/api/v1/public/auth/apple"
+APPLE_RESP=$(curl -s -w "\n%{http_code}" "$APPLE_PUB_URL" \
+    -X POST -H "Content-Type: application/json" \
+    -d '{"identityToken":"not-a-real-jwt"}')
+APPLE_BODY=$(echo "$APPLE_RESP" | sed '$d')
+APPLE_STATUS=$(echo "$APPLE_RESP" | tail -1)
+assert_status "POST /api/v1/public/auth/apple (disabled)" 200 "$APPLE_STATUS"
+assert_contains "apple disabled returns APPLE_NOT_CONFIGURED" '"authStatus":"APPLE_NOT_CONFIGURED"' "$APPLE_BODY"
+
+# Missing identityToken — while Apple is disabled, server short-circuits with APPLE_NOT_CONFIGURED.
+# (When Apple is enabled, this same request returns 400 "identityToken is required".)
+APPLE_MISSING_RESP=$(curl -s -w "\n%{http_code}" "$APPLE_PUB_URL" \
+    -X POST -H "Content-Type: application/json" -d '{}')
+APPLE_MISSING_BODY=$(echo "$APPLE_MISSING_RESP" | sed '$d')
+APPLE_MISSING_STATUS=$(echo "$APPLE_MISSING_RESP" | tail -1)
+assert_status "POST /api/v1/public/auth/apple empty body (disabled)" 200 "$APPLE_MISSING_STATUS"
+assert_contains "empty-body apple returns APPLE_NOT_CONFIGURED" '"authStatus":"APPLE_NOT_CONFIGURED"' "$APPLE_MISSING_BODY"
+
+# App signup with appleIdentityToken (malformed) when Apple disabled -> APPLE_NOT_CONFIGURED
+APPLE_SIGNUP_RESP=$(curl -s -w "\n%{http_code}" "$BASE_URL/user-management/signup" \
+    -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
+    -d '{"appleIdentityToken":"not-a-real-jwt"}')
+APPLE_SIGNUP_BODY=$(echo "$APPLE_SIGNUP_RESP" | sed '$d')
+APPLE_SIGNUP_STATUS=$(echo "$APPLE_SIGNUP_RESP" | tail -1)
+assert_status "POST signup with appleIdentityToken (disabled)" 200 "$APPLE_SIGNUP_STATUS"
+assert_contains "signup apple disabled returns APPLE_NOT_CONFIGURED" '"authStatus":"APPLE_NOT_CONFIGURED"' "$APPLE_SIGNUP_BODY"
+
+# ---- 13. 404 Handling ----
 echo ""
 echo -e "${BOLD}--- Error Handling ---${NC}"
 

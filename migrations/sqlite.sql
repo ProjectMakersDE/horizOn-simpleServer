@@ -6,8 +6,13 @@ CREATE TABLE IF NOT EXISTS users (
     anonymous_token TEXT UNIQUE NOT NULL,
     session_token TEXT,
     session_expires_at TEXT,
+    email TEXT,
+    apple_user_id TEXT,
+    is_private_relay_email INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE INDEX IF NOT EXISTS idx_users_apple_user_id ON users(apple_user_id);
 
 CREATE TABLE IF NOT EXISTS leaderboard (
     id TEXT PRIMARY KEY,

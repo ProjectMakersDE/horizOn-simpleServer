@@ -56,6 +56,33 @@ class Database
 
         // Add email column to users table if it doesn't exist (for Email Sending)
         self::addColumnIfNotExists($pdo, $driver, 'users', 'email', 'TEXT', 'VARCHAR(254)');
+
+        // Apple Sign-In columns (added incrementally so existing deployments upgrade cleanly).
+        self::addColumnIfNotExists($pdo, $driver, 'users', 'apple_user_id', 'TEXT', 'VARCHAR(255)');
+        self::addColumnIfNotExists($pdo, $driver, 'users', 'is_private_relay_email', 'INTEGER DEFAULT 0', 'TINYINT(1) NOT NULL DEFAULT 0');
+        self::createIndexIfNotExists($pdo, $driver, 'idx_users_apple_user_id', 'users', 'apple_user_id');
+    }
+
+    private static function createIndexIfNotExists(PDO $pdo, string $driver, string $indexName, string $table, string $column): void
+    {
+        try {
+            if ($driver === 'sqlite') {
+                $sql = "CREATE INDEX IF NOT EXISTS {$indexName} ON {$table}({$column})";
+                $pdo->exec($sql);
+            } else {
+                $stmt = $pdo->prepare(
+                    "SELECT COUNT(*) as cnt FROM information_schema.STATISTICS
+                     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?"
+                );
+                $stmt->execute([$table, $indexName]);
+                if ((int)$stmt->fetch()['cnt'] === 0) {
+                    $sql = "CREATE INDEX {$indexName} ON {$table}({$column})";
+                    $pdo->exec($sql);
+                }
+            }
+        } catch (\Throwable $e) {
+            error_log('horizOn migration notice (index): ' . $e->getMessage());
+        }
     }
 
     private static function addColumnIfNotExists(PDO $pdo, string $driver, string $table, string $column, string $sqliteType, string $mysqlType): void

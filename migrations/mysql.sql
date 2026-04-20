@@ -3,10 +3,14 @@
 CREATE TABLE IF NOT EXISTS users (
     id CHAR(36) PRIMARY KEY,
     display_name VARCHAR(30) NOT NULL,
-    anonymous_token VARCHAR(32) UNIQUE NOT NULL,
+    anonymous_token VARCHAR(64) UNIQUE NOT NULL,
     session_token VARCHAR(256),
     session_expires_at DATETIME,
-    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    email VARCHAR(254),
+    apple_user_id VARCHAR(255),
+    is_private_relay_email TINYINT(1) NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_users_apple_user_id (apple_user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS leaderboard (

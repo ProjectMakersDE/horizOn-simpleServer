@@ -44,6 +44,8 @@ require_once $baseDir . '/src/UserFeedback/UserFeedbackController.php';
 require_once $baseDir . '/src/UserLogs/UserLogsController.php';
 require_once $baseDir . '/src/CrashReporting/CrashReportingController.php';
 require_once $baseDir . '/src/EmailSending/EmailSendingController.php';
+require_once $baseDir . '/src/AppleSignIn/AppleIdTokenVerifier.php';
+require_once $baseDir . '/src/AppleSignIn/AppleSignInController.php';
 
 // Initialize
 $envPath = $baseDir . '/.env';
@@ -63,6 +65,9 @@ $router = new Router();
 $router->get('/api/v1/app/health', function (Request $req) {
     Response::json(['status' => 'ok', 'timestamp' => Database::now()]);
 });
+
+// --- Public Apple Sign-In (no API key required) ---
+$router->post('/api/v1/public/auth/apple', [AppleSignInController::class, 'publicAuth']);
 
 // --- Middleware: Auth + Rate Limit for all /api/v1/app/* except health ---
 $prefix = '/api/v1/app';
