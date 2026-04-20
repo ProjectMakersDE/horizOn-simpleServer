@@ -1,3 +1,10 @@
+# [1.2.0](https://github.com/ProjectMakersDE/horizOn-simpleServer/compare/v1.1.0...v1.2.0) (2026-04-20)
+
+
+### Features
+
+* **apple-signin:** apple sign-in support for self-hosted instances ([aa8983c](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/aa8983c5c76248810003765f943e01cb9849d6af))
+
 # [1.1.0](https://github.com/ProjectMakersDE/horizOn-simpleServer/compare/v1.0.1...v1.1.0) (2026-04-11)
 
 
