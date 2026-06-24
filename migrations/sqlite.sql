@@ -34,6 +34,13 @@ CREATE TABLE IF NOT EXISTS remote_configs (
     config_value TEXT
 );
 
+CREATE TABLE IF NOT EXISTS localizations (
+    localization_key TEXT NOT NULL,
+    lang TEXT NOT NULL,
+    value TEXT,
+    PRIMARY KEY (localization_key, lang)
+);
+
 CREATE TABLE IF NOT EXISTS news (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,

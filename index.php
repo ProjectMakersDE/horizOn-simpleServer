@@ -38,6 +38,7 @@ require_once $baseDir . '/src/UserManagement/UserManagementController.php';
 require_once $baseDir . '/src/Leaderboard/LeaderboardController.php';
 require_once $baseDir . '/src/CloudSave/CloudSaveController.php';
 require_once $baseDir . '/src/RemoteConfig/RemoteConfigController.php';
+require_once $baseDir . '/src/Localization/LocalizationController.php';
 require_once $baseDir . '/src/News/NewsController.php';
 require_once $baseDir . '/src/GiftCodes/GiftCodesController.php';
 require_once $baseDir . '/src/UserFeedback/UserFeedbackController.php';
@@ -96,6 +97,11 @@ $router->post($prefix . '/cloud-save/load', [CloudSaveController::class, 'load']
 // --- Remote Config ---
 $router->get($prefix . '/remote-config/all', [RemoteConfigController::class, 'all']);
 $router->get($prefix . '/remote-config/{key}', [RemoteConfigController::class, 'get']);
+
+// --- Localization ---
+$router->get($prefix . '/localization/all', [LocalizationController::class, 'all']);
+$router->get($prefix . '/localization/languages', [LocalizationController::class, 'languages']);
+$router->get($prefix . '/localization/{key}', [LocalizationController::class, 'get']);
 
 // --- News ---
 $router->get($prefix . '/news', [NewsController::class, 'list']);

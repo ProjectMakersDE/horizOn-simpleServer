@@ -33,6 +33,13 @@ CREATE TABLE IF NOT EXISTS remote_configs (
     config_value TEXT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE IF NOT EXISTS localizations (
+    localization_key VARCHAR(256) NOT NULL,
+    lang VARCHAR(10) NOT NULL,
+    value TEXT,
+    PRIMARY KEY (localization_key, lang)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS news (
     id CHAR(36) PRIMARY KEY,
     title VARCHAR(200) NOT NULL,

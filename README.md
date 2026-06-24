@@ -19,6 +19,7 @@ Built for indie game developers and small studios who want full control over the
 - Global leaderboards (submit, top, rank, around)
 - Cloud save data (up to 300KB per user)
 - Remote configuration key-value store
+- Localization key-value store with per-language values and English fallback
 - In-app news system with language filtering
 - Gift code validation and redemption
 - User feedback collection
@@ -48,6 +49,9 @@ This table compares the self-hosted Simple Server with the fully managed [horizO
 | Save & load | :white_check_mark: | :white_check_mark: |
 | **Remote Config** | | |
 | Key-value store | :white_check_mark: | :white_check_mark: |
+| **Localization** | | |
+| Key-value translations with language fallback (read) | :white_check_mark: | :white_check_mark: |
+| LLM-powered auto-translation (15 languages) | :x: | :white_check_mark: |
 | **News** | | |
 | News with language filtering | :white_check_mark: | :white_check_mark: |
 | LLM-powered auto-translation (15 languages) | :x: | :white_check_mark: |
@@ -166,6 +170,16 @@ All endpoints are prefixed with `/api/v1/app`. Except for `/health`, all endpoin
 |---|---|---|
 | GET | `/remote-config/all` | Get all configuration key-value pairs |
 | GET | `/remote-config/{key}` | Get a single configuration value |
+
+### Localization
+
+App read endpoints only. Translations are managed directly in the `localizations` table (one row per key + language); there is no admin UI, just like Remote Config.
+
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/localization/all` | Get all translations for a language (`?lang=`, default `en`) |
+| GET | `/localization/languages` | List the supported language codes (15 languages) |
+| GET | `/localization/{key}` | Get a single translation (`?lang=`, default `en`; falls back to `en` if missing) |
 
 ### News
 
@@ -517,6 +531,7 @@ horizOn-simpleServer/
 │   ├── EmailSending/
 │   ├── GiftCodes/
 │   ├── Leaderboard/
+│   ├── Localization/
 │   ├── News/
 │   ├── RemoteConfig/
 │   ├── UserFeedback/
