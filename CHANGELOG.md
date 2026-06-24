@@ -1,3 +1,10 @@
+# [1.3.0](https://github.com/ProjectMakersDE/horizOn-simpleServer/compare/v1.2.0...v1.3.0) (2026-06-24)
+
+
+### Features
+
+* **localization:** add localization read endpoints and table ([7947656](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/7947656609bdc4b5a287b10c2ca4e031db68d82a))
+
 # [1.2.0](https://github.com/ProjectMakersDE/horizOn-simpleServer/compare/v1.1.0...v1.2.0) (2026-04-20)
 
 
