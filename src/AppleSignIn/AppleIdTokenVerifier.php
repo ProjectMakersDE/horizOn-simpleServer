@@ -131,7 +131,7 @@ class AppleIdTokenVerifier
         }
 
         $isPrivateRelay = false;
-        if ($email !== null && str_ends_with(strtolower($email), self::PRIVATE_RELAY_DOMAIN)) {
+        if ($email !== null && self::endsWith(strtolower($email), self::PRIVATE_RELAY_DOMAIN)) {
             $isPrivateRelay = true;
         }
         if (isset($payload['is_private_email'])) {
@@ -147,6 +147,18 @@ class AppleIdTokenVerifier
             'emailVerified' => $emailVerified,
             'isPrivateRelay' => $isPrivateRelay,
         ];
+    }
+
+    /**
+     * PHP 7.4 compatible replacement for str_ends_with() (PHP 8.0+).
+     */
+    private static function endsWith(string $haystack, string $needle): bool
+    {
+        $length = strlen($needle);
+        if ($length === 0) {
+            return true;
+        }
+        return strlen($haystack) >= $length && substr($haystack, -$length) === $needle;
     }
 
     /**
