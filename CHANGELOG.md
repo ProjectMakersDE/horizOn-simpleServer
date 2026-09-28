@@ -1,3 +1,10 @@
+## [1.3.1](https://github.com/ProjectMakersDE/horizOn-simpleServer/compare/v1.3.0...v1.3.1) (2026-09-28)
+
+
+### Bug Fixes
+
+* **apple-signin:** drop PHP 8 str_ends_with for PHP 7.4 support ([a32fb0e](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/a32fb0e24de6a7e043172d45d56d7ca1ed30112a))
+
 # [1.3.0](https://github.com/ProjectMakersDE/horizOn-simpleServer/compare/v1.2.0...v1.3.0) (2026-06-24)
 
 
