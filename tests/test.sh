@@ -56,8 +56,6 @@ APPLE_SIGN_IN_ENABLED=false
 APPLE_TEAM_ID=
 APPLE_SERVICE_ID=
 APPLE_BUNDLE_ID=
-GIFT_CODE_LEGACY_REDEEM_ENABLED=true
-GIFT_CODE_LEGACY_REDEEM_SUNSET=2999-01-01T00:00:00Z
 EOF
 
 # Clean previous test DB
@@ -332,19 +330,23 @@ VALIDATE_RESP=$(curl -s "$BASE_URL/gift-codes/validate" \
     -d "{\"code\":\"NONEXISTENT\",\"userId\":\"$USER_ID\"}")
 assert_contains "POST /gift-codes/validate invalid code returns false" '"valid":false' "$VALIDATE_RESP"
 
-# Redeem non-existent code
+# Redeem non-existent code (with the player's session)
 REDEEM_RESP=$(curl -s "$BASE_URL/gift-codes/redeem" \
     -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
+    -H "Authorization: Bearer $SESSION_TOKEN" \
     -d "{\"code\":\"NONEXISTENT\",\"userId\":\"$USER_ID\"}")
 assert_contains "POST /gift-codes/redeem not found returns success false" '"success":false' "$REDEEM_RESP"
 assert_contains "POST /gift-codes/redeem returns not found message" 'not found' "$REDEEM_RESP"
 
-# Redeem without session is a legacy request inside the transition window
-LEGACY_HEADERS=$(curl -s -D - -o /dev/null "$BASE_URL/gift-codes/redeem" \
+# Redeem without session -> 401 SESSION_REQUIRED, no transition window, no Deprecation/Sunset
+NOSESSION_RESP=$(curl -s -D - -w "\n%{http_code}" "$BASE_URL/gift-codes/redeem" \
     -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
     -d "{\"code\":\"NONEXISTENT\",\"userId\":\"$USER_ID\"}")
-assert_contains "redeem without session announces Deprecation" 'Deprecation: true' "$LEGACY_HEADERS"
-assert_contains "redeem without session announces Sunset" 'Sunset: Tue, 01 Jan 2999 00:00:00 GMT' "$LEGACY_HEADERS"
+NOSESSION_STATUS=$(echo "$NOSESSION_RESP" | tail -1)
+assert_status "POST /gift-codes/redeem without session" 401 "$NOSESSION_STATUS"
+assert_contains "redeem without session returns SESSION_REQUIRED" '"code":"SESSION_REQUIRED"' "$NOSESSION_RESP"
+assert_not_contains "redeem without session has no Deprecation header" 'Deprecation:' "$NOSESSION_RESP"
+assert_not_contains "redeem without session has no Sunset header" 'Sunset:' "$NOSESSION_RESP"
 
 # Second player with its own session
 SIGNUP2_BODY=$(curl -s "$BASE_URL/user-management/signup" \
@@ -386,15 +388,15 @@ REDEEM_OWN_STATUS=$(echo "$REDEEM_OWN_RESP" | tail -1)
 assert_status "POST /gift-codes/redeem with own session" 200 "$REDEEM_OWN_STATUS"
 assert_contains "own-session redeem succeeds" '"success":true' "$REDEEM_OWN_BODY"
 
-# Transition window switched off -> redeem without session is rejected
-cp .env .env.giftcode.$$
-grep -v '^GIFT_CODE_LEGACY_REDEEM_ENABLED=' .env.giftcode.$$ > .env
-echo "GIFT_CODE_LEGACY_REDEEM_ENABLED=false" >> .env
+# Existing code without session -> 401 and the code is not used up for that player
 REDEEM_STRICT_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/gift-codes/redeem" \
     -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
     -d "{\"code\":\"SESSION886\",\"userId\":\"$USER_ID_2\"}")
-assert_status "POST /gift-codes/redeem without session when the window is off" 401 "$REDEEM_STRICT_STATUS"
-mv .env.giftcode.$$ .env
+assert_status "POST /gift-codes/redeem of an existing code without session" 401 "$REDEEM_STRICT_STATUS"
+STRICT_STILL_VALID=$(curl -s "$BASE_URL/gift-codes/validate" \
+    -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
+    -d "{\"code\":\"SESSION886\",\"userId\":\"$USER_ID_2\"}")
+assert_contains "code is not redeemed for a request without session" '"valid":true' "$STRICT_STILL_VALID"
 
 # ---- 8b. Player Profile ----
 echo ""
@@ -522,7 +524,7 @@ $now = gmdate("Y-m-d\\TH:i:s");
 $stmt->execute(["gift-881", "GRANT881", "cosmetic", "{\"gold\":1,\"grants\":[\"frame.gold\",\"badge.supporter\",\"gone.item\"]}", 10, 0, $now]);
 $stmt->execute(["gift-881-cap", "CAP881", "cosmetic", "{\"grants\":[\"badge.supporter\"]}", 10, 0, $now]);'
 
-# Code with grants without session (legacy window on) -> 401, code not used up
+# Code with grants without session -> 401, code not used up
 GRANT_NOSESSION_RESP=$(curl -s -w "\n%{http_code}" "$BASE_URL/gift-codes/redeem" \
     -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
     -d "{\"code\":\"GRANT881\",\"userId\":\"$USER_ID\"}")

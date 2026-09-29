@@ -4,13 +4,6 @@ declare(strict_types=1);
 
 class GiftCodesController
 {
-    /**
-     * End of the transition window in which redeem requests WITHOUT a player
-     * session (older SDK versions) are still accepted. Override with
-     * GIFT_CODE_LEGACY_REDEEM_SUNSET, switch off with GIFT_CODE_LEGACY_REDEEM_ENABLED=false.
-     */
-    private const DEFAULT_LEGACY_REDEEM_SUNSET = '2027-03-01T00:00:00Z';
-
     public static function validate(Request $request): void
     {
         $code = $request->body('code', '');
@@ -36,9 +29,10 @@ class GiftCodesController
             return;
         }
 
-        // Bind the redemption to the player's session (exits with 401/403 otherwise).
-        // False for a legacy request without any Authorization header.
-        $sessionAuthenticated = self::requireRedeemSession($request, (string)$userId);
+        // Bind the redemption to the player's session: a missing, invalid or expired
+        // session exits with 401 SESSION_REQUIRED, a session of another player with
+        // 403 SESSION_FORBIDDEN. There is no redemption without a session.
+        Auth::requirePlayerSession($request, (string)$userId);
 
         $pdo = Database::connect();
 
@@ -68,14 +62,10 @@ class GiftCodesController
             self::failed('You have already redeemed this gift code');
         }
 
-        // Cosmetic grants are bound to the player's session: a code that unlocks
-        // something is not used up by a legacy request that cannot receive the unlock.
+        // Cosmetic grants go to the session player verified above.
         $grants = PlayerProfileController::parseGrants(
             $giftCode['reward_data'] !== null ? (string)$giftCode['reward_data'] : null
         );
-        if (!$sessionAuthenticated && count($grants) > 0) {
-            Auth::sessionRequired('A player session is required to redeem a gift code that unlocks cosmetics');
-        }
 
         // Redeem: redemption row, counter and unlocks in one transaction
         $now = Database::now();
@@ -95,7 +85,7 @@ class GiftCodesController
             $stmt = $pdo->prepare('INSERT INTO gift_code_redemptions (id, gift_code_id, user_id, redeemed_at) VALUES (?, ?, ?, ?)');
             $stmt->execute([Database::uuid(), $giftCode['id'], $userId, $now]);
 
-            if ($sessionAuthenticated && count($grants) > 0) {
+            if (count($grants) > 0) {
                 $grantedUnlocks = self::applyGrants($pdo, (string)$userId, $grants);
                 if ($grantedUnlocks === null) {
                     $pdo->rollBack();
@@ -177,45 +167,6 @@ class GiftCodesController
             'giftData' => null,
             'grantedUnlocks' => [],
         ]);
-    }
-
-    /**
-     * A redeem request with an Authorization header must carry a valid, unexpired
-     * Bearer session of the body userId (401 SESSION_REQUIRED for a missing or
-     * expired session, 403 SESSION_FORBIDDEN for a session of another user).
-     * A request without any Authorization header comes from an older SDK and is
-     * only accepted during the transition window.
-     *
-     * @return bool true for a verified session, false for a legacy request.
-     */
-    private static function requireRedeemSession(Request $request, string $userId): bool
-    {
-        if (!Auth::hasAuthorization($request)) {
-            self::requireLegacyRedeemWindow($userId);
-            return false;
-        }
-
-        Auth::requirePlayerSession($request, $userId);
-        return true;
-    }
-
-    private static function requireLegacyRedeemWindow(string $userId): void
-    {
-        $sunset = Config::get('GIFT_CODE_LEGACY_REDEEM_SUNSET', self::DEFAULT_LEGACY_REDEEM_SUNSET);
-        $sunsetTimestamp = strtotime($sunset);
-
-        header('Deprecation: true');
-        if ($sunsetTimestamp !== false) {
-            header('Sunset: ' . gmdate('D, d M Y H:i:s', $sunsetTimestamp) . ' GMT');
-        }
-
-        $enabled = Config::getBool('GIFT_CODE_LEGACY_REDEEM_ENABLED', true);
-        if (!$enabled || $sunsetTimestamp === false || time() >= $sunsetTimestamp) {
-            Auth::sessionRequired('Bearer session required');
-        }
-
-        error_log('[horizOn] Gift code redeem without player session for user ' . $userId
-            . ' (legacy SDK), accepted until ' . $sunset);
     }
 
     private static function isCodeValid(string $code, string $userId): bool

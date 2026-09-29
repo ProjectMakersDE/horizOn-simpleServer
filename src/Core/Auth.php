@@ -22,14 +22,6 @@ class Auth
     }
 
     /**
-     * True when the request carries any Authorization header.
-     */
-    public static function hasAuthorization(Request $request): bool
-    {
-        return trim((string)$request->header('authorization', '')) !== '';
-    }
-
-    /**
      * Requires a valid, unexpired Bearer session (users.session_token) that
      * belongs to $userId. Exits with 401 SESSION_REQUIRED (and
      * WWW-Authenticate: Bearer) for a missing, malformed, unknown or expired
