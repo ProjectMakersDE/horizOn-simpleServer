@@ -9,6 +9,10 @@ CREATE TABLE IF NOT EXISTS users (
     email TEXT,
     apple_user_id TEXT,
     is_private_relay_email INTEGER NOT NULL DEFAULT 0,
+    avatar_id TEXT,
+    frame_id TEXT,
+    badges TEXT,
+    unlocks TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -69,6 +73,16 @@ CREATE TABLE IF NOT EXISTS gift_code_redemptions (
     FOREIGN KEY (gift_code_id) REFERENCES gift_codes(id),
     FOREIGN KEY (user_id) REFERENCES users(id),
     UNIQUE(gift_code_id, user_id)
+);
+
+-- Player profile cosmetics catalog (one per installation), filled by SQL.
+-- cosmetic_id: 1 to 32 characters a-z 0-9 . _ - (starts with a letter or digit)
+-- type: avatar | frame | badge; locked: 0 free for every player, 1 needs an unlock
+CREATE TABLE IF NOT EXISTS cosmetics (
+    cosmetic_id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    locked INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS user_feedback (

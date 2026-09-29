@@ -396,6 +396,188 @@ REDEEM_STRICT_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/gift-co
 assert_status "POST /gift-codes/redeem without session when the window is off" 401 "$REDEEM_STRICT_STATUS"
 mv .env.giftcode.$$ .env
 
+# ---- 8b. Player Profile ----
+echo ""
+echo -e "${BOLD}--- Player Profile ---${NC}"
+
+# Seed the cosmetics catalog directly in the test database (simpleServer fills it by SQL)
+php -r '$pdo = new PDO("sqlite:./data/test_horizon_integration.db");
+$stmt = $pdo->prepare("INSERT INTO cosmetics (cosmetic_id, type, locked, created_at) VALUES (?, ?, ?, ?)");
+$now = gmdate("Y-m-d\\TH:i:s");
+foreach ([["avatar.zombie", "avatar", 0], ["frame.gold", "frame", 1], ["badge.supporter", "badge", 1],
+          ["badge.a", "badge", 0], ["badge.b", "badge", 0], ["badge.c", "badge", 0], ["badge.d", "badge", 0]] as $c) {
+    $stmt->execute([$c[0], $c[1], $c[2], $now]);
+}'
+
+# GET without session -> 401 SESSION_REQUIRED
+PP_NOSESSION_RESP=$(curl -s -w "\n%{http_code}" "$BASE_URL/player-profile?userId=$USER_ID" -H "X-API-Key: $API_KEY")
+PP_NOSESSION_BODY=$(echo "$PP_NOSESSION_RESP" | sed '$d')
+PP_NOSESSION_STATUS=$(echo "$PP_NOSESSION_RESP" | tail -1)
+assert_status "GET /player-profile without session" 401 "$PP_NOSESSION_STATUS"
+assert_contains "profile without session returns SESSION_REQUIRED" '"code":"SESSION_REQUIRED"' "$PP_NOSESSION_BODY"
+
+# GET with an expired or unknown session -> 401
+PP_BADSESSION_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/player-profile?userId=$USER_ID" \
+    -H "X-API-Key: $API_KEY" -H "Authorization: Bearer invalid-session-token")
+assert_status "GET /player-profile with invalid session" 401 "$PP_BADSESSION_STATUS"
+
+# GET with another player's session -> 403 SESSION_FORBIDDEN
+PP_FOREIGN_RESP=$(curl -s -w "\n%{http_code}" "$BASE_URL/player-profile?userId=$USER_ID" \
+    -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN_2")
+PP_FOREIGN_BODY=$(echo "$PP_FOREIGN_RESP" | sed '$d')
+PP_FOREIGN_STATUS=$(echo "$PP_FOREIGN_RESP" | tail -1)
+assert_status "GET /player-profile with another player's session" 403 "$PP_FOREIGN_STATUS"
+assert_contains "foreign session returns SESSION_FORBIDDEN" '"code":"SESSION_FORBIDDEN"' "$PP_FOREIGN_BODY"
+
+# GET own profile -> empty profile, catalog with available flags, limits
+PP_GET_RESP=$(curl -s -w "\n%{http_code}" "$BASE_URL/player-profile?userId=$USER_ID" \
+    -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN")
+PP_GET_BODY=$(echo "$PP_GET_RESP" | sed '$d')
+PP_GET_STATUS=$(echo "$PP_GET_RESP" | tail -1)
+assert_status "GET /player-profile with own session" 200 "$PP_GET_STATUS"
+assert_contains "profile is empty at first" '"profile":{"avatarId":null,"frameId":null,"badges":[]}' "$PP_GET_BODY"
+assert_contains "profile has no unlocks at first" '"unlocks":[]' "$PP_GET_BODY"
+assert_contains "catalog marks a free avatar available" '{"id":"avatar.zombie","type":"avatar","locked":false,"available":true}' "$PP_GET_BODY"
+assert_contains "catalog marks a locked frame unavailable" '{"id":"frame.gold","type":"frame","locked":true,"available":false}' "$PP_GET_BODY"
+assert_contains "profile returns limits" '"limits":{"maxBadges":3,"maxUnlocks":25}' "$PP_GET_BODY"
+
+# PUT a locked frame -> 403 COSMETIC_LOCKED
+PP_LOCKED_RESP=$(curl -s -w "\n%{http_code}" "$BASE_URL/player-profile" \
+    -X PUT -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" \
+    -d "{\"userId\":\"$USER_ID\",\"frameId\":\"frame.gold\"}")
+PP_LOCKED_BODY=$(echo "$PP_LOCKED_RESP" | sed '$d')
+PP_LOCKED_STATUS=$(echo "$PP_LOCKED_RESP" | tail -1)
+assert_status "PUT /player-profile with a locked frame" 403 "$PP_LOCKED_STATUS"
+assert_contains "locked frame returns COSMETIC_LOCKED" '"code":"COSMETIC_LOCKED"' "$PP_LOCKED_BODY"
+
+# PUT a badge into the avatar slot -> 400 COSMETIC_TYPE_MISMATCH
+PP_TYPE_RESP=$(curl -s -w "\n%{http_code}" "$BASE_URL/player-profile" \
+    -X PUT -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" \
+    -d "{\"userId\":\"$USER_ID\",\"avatarId\":\"badge.a\"}")
+PP_TYPE_BODY=$(echo "$PP_TYPE_RESP" | sed '$d')
+PP_TYPE_STATUS=$(echo "$PP_TYPE_RESP" | tail -1)
+assert_status "PUT /player-profile with a type mismatch" 400 "$PP_TYPE_STATUS"
+assert_contains "type mismatch returns COSMETIC_TYPE_MISMATCH" '"code":"COSMETIC_TYPE_MISMATCH"' "$PP_TYPE_BODY"
+
+# PUT four badges -> 400 INVALID_BADGES
+PP_BADGES_RESP=$(curl -s -w "\n%{http_code}" "$BASE_URL/player-profile" \
+    -X PUT -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" \
+    -d "{\"userId\":\"$USER_ID\",\"badges\":[\"badge.a\",\"badge.b\",\"badge.c\",\"badge.d\"]}")
+PP_BADGES_BODY=$(echo "$PP_BADGES_RESP" | sed '$d')
+PP_BADGES_STATUS=$(echo "$PP_BADGES_RESP" | tail -1)
+assert_status "PUT /player-profile with too many badges" 400 "$PP_BADGES_STATUS"
+assert_contains "too many badges returns INVALID_BADGES" '"code":"INVALID_BADGES"' "$PP_BADGES_BODY"
+
+# PUT a badge twice -> 400 INVALID_BADGES
+PP_DUP_BODY=$(curl -s "$BASE_URL/player-profile" \
+    -X PUT -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" \
+    -d "{\"userId\":\"$USER_ID\",\"badges\":[\"badge.a\",\"badge.a\"]}")
+assert_contains "duplicate badge returns INVALID_BADGES" '"code":"INVALID_BADGES"' "$PP_DUP_BODY"
+
+# PUT a malformed ID -> 400 INVALID_COSMETIC_ID
+PP_INVALID_BODY=$(curl -s "$BASE_URL/player-profile" \
+    -X PUT -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" \
+    -d "{\"userId\":\"$USER_ID\",\"avatarId\":\"Bad ID\"}")
+assert_contains "malformed ID returns INVALID_COSMETIC_ID" '"code":"INVALID_COSMETIC_ID"' "$PP_INVALID_BODY"
+
+# PUT an ID that is not in the catalog -> 400 COSMETIC_NOT_FOUND
+PP_UNKNOWN_BODY=$(curl -s "$BASE_URL/player-profile" \
+    -X PUT -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" \
+    -d "{\"userId\":\"$USER_ID\",\"avatarId\":\"avatar.unknown\"}")
+assert_contains "unknown ID returns COSMETIC_NOT_FOUND" '"code":"COSMETIC_NOT_FOUND"' "$PP_UNKNOWN_BODY"
+
+# PUT with another player's session -> 403
+PP_PUT_FOREIGN_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/player-profile" \
+    -X PUT -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN_2" \
+    -d "{\"userId\":\"$USER_ID\",\"avatarId\":\"avatar.zombie\"}")
+assert_status "PUT /player-profile with another player's session" 403 "$PP_PUT_FOREIGN_STATUS"
+
+# PUT free avatar and badge -> 200 with the new profile
+PP_SET_RESP=$(curl -s -w "\n%{http_code}" "$BASE_URL/player-profile" \
+    -X PUT -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" \
+    -d "{\"userId\":\"$USER_ID\",\"avatarId\":\"avatar.zombie\",\"frameId\":null,\"badges\":[\"badge.a\"]}")
+PP_SET_BODY=$(echo "$PP_SET_RESP" | sed '$d')
+PP_SET_STATUS=$(echo "$PP_SET_RESP" | tail -1)
+assert_status "PUT /player-profile with free cosmetics" 200 "$PP_SET_STATUS"
+assert_contains "PUT returns the new profile" '"profile":{"avatarId":"avatar.zombie","frameId":null,"badges":["badge.a"]}' "$PP_SET_BODY"
+
+# Leaderboard entries carry the profile
+PP_TOP_RESP=$(curl -s "$BASE_URL/leaderboard/top?userId=$USER_ID&limit=10" -H "X-API-Key: $API_KEY")
+assert_contains "leaderboard top entry contains profile" '"profile":{"avatarId":"avatar.zombie","frameId":null,"badges":["badge.a"]}' "$PP_TOP_RESP"
+PP_RANK_RESP=$(curl -s "$BASE_URL/leaderboard/rank?userId=$USER_ID" -H "X-API-Key: $API_KEY")
+assert_contains "leaderboard rank contains profile" '"profile":{"avatarId":"avatar.zombie"' "$PP_RANK_RESP"
+PP_AROUND_RESP=$(curl -s "$BASE_URL/leaderboard/around?userId=$USER_ID&range=5" -H "X-API-Key: $API_KEY")
+assert_contains "leaderboard around entry contains profile" '"profile":{"avatarId":"avatar.zombie"' "$PP_AROUND_RESP"
+PP_RANK_EMPTY_RESP=$(curl -s "$BASE_URL/leaderboard/rank?userId=$USER_ID_2" -H "X-API-Key: $API_KEY")
+assert_contains "empty rank result contains an empty profile" '"profile":{"avatarId":null,"frameId":null,"badges":[]}' "$PP_RANK_EMPTY_RESP"
+
+# CORS preflight allows the Authorization header
+PP_CORS_HEADERS=$(curl -s -D - -o /dev/null -X OPTIONS "$BASE_URL/player-profile")
+assert_contains "CORS preflight allows Authorization" 'Authorization' "$PP_CORS_HEADERS"
+
+# Gift codes with cosmetic grants
+php -r '$pdo = new PDO("sqlite:./data/test_horizon_integration.db");
+$stmt = $pdo->prepare("INSERT INTO gift_codes (id, code, reward_type, reward_data, max_redemptions, current_redemptions, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)");
+$now = gmdate("Y-m-d\\TH:i:s");
+$stmt->execute(["gift-881", "GRANT881", "cosmetic", "{\"gold\":1,\"grants\":[\"frame.gold\",\"badge.supporter\",\"gone.item\"]}", 10, 0, $now]);
+$stmt->execute(["gift-881-cap", "CAP881", "cosmetic", "{\"grants\":[\"badge.supporter\"]}", 10, 0, $now]);'
+
+# Code with grants without session (legacy window on) -> 401, code not used up
+GRANT_NOSESSION_RESP=$(curl -s -w "\n%{http_code}" "$BASE_URL/gift-codes/redeem" \
+    -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
+    -d "{\"code\":\"GRANT881\",\"userId\":\"$USER_ID\"}")
+GRANT_NOSESSION_BODY=$(echo "$GRANT_NOSESSION_RESP" | sed '$d')
+GRANT_NOSESSION_STATUS=$(echo "$GRANT_NOSESSION_RESP" | tail -1)
+assert_status "redeem a code with grants without session" 401 "$GRANT_NOSESSION_STATUS"
+assert_contains "code with grants without session returns SESSION_REQUIRED" '"code":"SESSION_REQUIRED"' "$GRANT_NOSESSION_BODY"
+GRANT_STILL_VALID=$(curl -s "$BASE_URL/gift-codes/validate" \
+    -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
+    -d "{\"code\":\"GRANT881\",\"userId\":\"$USER_ID\"}")
+assert_contains "code with grants is not used up without session" '"valid":true' "$GRANT_STILL_VALID"
+
+# Code with grants with session -> unlocks written, unknown grant skipped
+GRANT_OWN_RESP=$(curl -s -w "\n%{http_code}" "$BASE_URL/gift-codes/redeem" \
+    -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" \
+    -d "{\"code\":\"GRANT881\",\"userId\":\"$USER_ID\"}")
+GRANT_OWN_BODY=$(echo "$GRANT_OWN_RESP" | sed '$d')
+GRANT_OWN_STATUS=$(echo "$GRANT_OWN_RESP" | tail -1)
+assert_status "redeem a code with grants with own session" 200 "$GRANT_OWN_STATUS"
+assert_contains "redeem returns grantedUnlocks" '"grantedUnlocks":["frame.gold","badge.supporter"]' "$GRANT_OWN_BODY"
+assert_not_contains "grant missing from the catalog is skipped" 'gone.item"]' "$GRANT_OWN_BODY"
+
+# Redeem without grants returns an empty grantedUnlocks
+GRANT_NONE_BODY=$(curl -s "$BASE_URL/gift-codes/redeem" \
+    -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" \
+    -d "{\"code\":\"NONEXISTENT\",\"userId\":\"$USER_ID\"}")
+assert_contains "failed redeem returns empty grantedUnlocks" '"grantedUnlocks":[]' "$GRANT_NONE_BODY"
+
+# The unlocked frame is now available and can be selected
+PP_AFTER_GRANT_BODY=$(curl -s "$BASE_URL/player-profile?userId=$USER_ID" \
+    -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN")
+assert_contains "profile lists the granted unlocks" '"unlocks":["frame.gold","badge.supporter"]' "$PP_AFTER_GRANT_BODY"
+assert_contains "granted frame is available" '{"id":"frame.gold","type":"frame","locked":true,"available":true}' "$PP_AFTER_GRANT_BODY"
+PP_SET_UNLOCKED_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/player-profile" \
+    -X PUT -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" \
+    -d "{\"userId\":\"$USER_ID\",\"avatarId\":\"avatar.zombie\",\"frameId\":\"frame.gold\",\"badges\":[\"badge.supporter\",\"badge.a\"]}")
+assert_status "PUT /player-profile with unlocked cosmetics" 200 "$PP_SET_UNLOCKED_STATUS"
+
+# Unlock cap: a player with 25 unlocks cannot redeem another grant (409), code not used up
+php -r '$pdo = new PDO("sqlite:./data/test_horizon_integration.db");
+$ids = array_map(function ($i) { return "old.item" . $i; }, range(1, 25));
+$stmt = $pdo->prepare("UPDATE users SET unlocks = ? WHERE id = ?");
+$stmt->execute([json_encode($ids), $argv[1]]);' "$USER_ID_2"
+GRANT_CAP_RESP=$(curl -s -w "\n%{http_code}" "$BASE_URL/gift-codes/redeem" \
+    -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN_2" \
+    -d "{\"code\":\"CAP881\",\"userId\":\"$USER_ID_2\"}")
+GRANT_CAP_BODY=$(echo "$GRANT_CAP_RESP" | sed '$d')
+GRANT_CAP_STATUS=$(echo "$GRANT_CAP_RESP" | tail -1)
+assert_status "redeem over the unlock cap" 409 "$GRANT_CAP_STATUS"
+assert_contains "unlock cap returns UNLOCK_LIMIT_REACHED" '"code":"UNLOCK_LIMIT_REACHED"' "$GRANT_CAP_BODY"
+GRANT_CAP_VALID=$(curl -s "$BASE_URL/gift-codes/validate" \
+    -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
+    -d "{\"code\":\"CAP881\",\"userId\":\"$USER_ID_2\"}")
+assert_contains "code over the unlock cap is not used up" '"valid":true' "$GRANT_CAP_VALID"
+
 # ---- 9. User Feedback ----
 echo ""
 echo -e "${BOLD}--- User Feedback ---${NC}"

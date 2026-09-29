@@ -21,7 +21,8 @@ Built for indie game developers and small studios who want full control over the
 - Remote configuration key-value store
 - Localization key-value store with per-language values and English fallback
 - In-app news system with language filtering
-- Gift code validation and redemption
+- Gift code validation and redemption (with cosmetic unlocks via `grants`)
+- Player profile: avatar, frame and up to 3 badges from a cosmetics catalog, shown in leaderboard entries
 - User feedback collection
 - User log ingestion (INFO, WARN, ERROR)
 - Crash reporting with automatic grouping, fingerprinting, and regression detection
@@ -44,6 +45,7 @@ This table compares the self-hosted Simple Server with the fully managed [horizO
 | Email verification & password reset | :x: | :white_check_mark: |
 | **Leaderboards** | | |
 | Submit, top, rank, around | :white_check_mark: | :white_check_mark: |
+| Player profile in top, rank, around entries | :white_check_mark: | :white_check_mark: |
 | Leaderboard statistics & management | :x: | :white_check_mark: |
 | **Cloud Saves** | | |
 | Save & load | :white_check_mark: | :white_check_mark: |
@@ -57,6 +59,12 @@ This table compares the self-hosted Simple Server with the fully managed [horizO
 | LLM-powered auto-translation (15 languages) | :x: | :white_check_mark: |
 | **Gift Codes** | | |
 | Validate & redeem | :white_check_mark: | :white_check_mark: |
+| Cosmetic unlocks via `grants` (session bound) | :white_check_mark: | :white_check_mark: |
+| Grants editor with catalog validation | :x: (SQL) | :white_check_mark: |
+| **Player Profile** | | |
+| Get & set avatar, frame, badges (same endpoints and error codes) | :white_check_mark: | :white_check_mark: |
+| Cosmetics catalog | :white_check_mark: (SQL table, no size limit) | :white_check_mark: (dashboard, per API key, tier limit) |
+| Grant & revoke unlocks per player | :x: (SQL) | :white_check_mark: |
 | **User Feedback** | | |
 | Feedback submission | :white_check_mark: | :white_check_mark: |
 | **User Logs** | | |
@@ -155,9 +163,9 @@ All endpoints are prefixed with `/api/v1/app`. Except for `/health`, all endpoin
 | Method | Endpoint | Description |
 |---|---|---|
 | POST | `/leaderboard/submit` | Submit or update a score |
-| GET | `/leaderboard/top` | Get top leaderboard entries |
-| GET | `/leaderboard/rank` | Get a user's rank |
-| GET | `/leaderboard/around` | Get entries around a user's position |
+| GET | `/leaderboard/top` | Get top leaderboard entries (each with the player `profile`) |
+| GET | `/leaderboard/rank` | Get a user's rank (with `profile`) |
+| GET | `/leaderboard/around` | Get entries around a user's position (each with `profile`) |
 
 ### Cloud Save
 
@@ -196,7 +204,7 @@ App read endpoints only. Translations are managed directly in the `localizations
 | POST | `/gift-codes/validate` | Check if a gift code is valid |
 | POST | `/gift-codes/redeem` | Redeem a gift code (needs the player session, see below) |
 
-`/gift-codes/redeem` is bound to the player's session: send `Authorization: Bearer <accessToken>` from sign-in. An invalid or expired session returns `401`, a session of another user `403`. Requests without any session (older SDK versions) are accepted until `GIFT_CODE_LEGACY_REDEEM_SUNSET` (default `2027-03-01T00:00:00Z`) and carry `Deprecation` and `Sunset` headers; set `GIFT_CODE_LEGACY_REDEEM_ENABLED=false` to require the session right away.
+`/gift-codes/redeem` is bound to the player's session: send `Authorization: Bearer <accessToken>` from sign-in. An invalid or expired session returns `401` (`SESSION_REQUIRED`), a session of another user `403` (`SESSION_FORBIDDEN`). Requests without any session (older SDK versions) are accepted until `GIFT_CODE_LEGACY_REDEEM_SUNSET` (default `2027-03-01T00:00:00Z`) and carry `Deprecation` and `Sunset` headers; set `GIFT_CODE_LEGACY_REDEEM_ENABLED=false` to require the session right away.
 
 ### User Feedback
 
@@ -225,6 +233,68 @@ App read endpoints only. Translations are managed directly in the `localizations
 | DELETE | `/email-sending/{emailId}` | Cancel a pending email |
 | GET | `/email-sending/{emailId}` | Get email status |
 | POST | `/email-sending/ticker` | Process pending emails (cron endpoint) |
+
+### Player Profile
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/player-profile?userId=` | Profile, unlocks and the cosmetics catalog with an `available` flag per entry |
+| PUT | `/player-profile` | Replace the whole profile (`userId`, `avatarId`, `frameId`, `badges`) |
+
+Both need `Authorization: Bearer <accessToken>` of `userId` (no transition window). See "Player Profile Setup" below.
+
+## Player Profile Setup
+
+Players pick an avatar, an optional frame and up to 3 badges. The server stores IDs only; your game maps them to its own art and treats unknown IDs as "not set". Same JSON shapes, caps and error codes as horizOn; simpleServer has one catalog per installation, no catalog size limit and no dashboard.
+
+### 1. Fill the Cosmetics Catalog
+
+IDs: 1 to 32 characters, `a-z`, `0-9`, `.`, `_`, `-`, starting with a letter or digit. `type` is `avatar`, `frame` or `badge`. `locked = 0` is free for every player, `locked = 1` needs an unlock.
+
+```sql
+INSERT INTO cosmetics (cosmetic_id, type, locked, created_at) VALUES
+  ('avatar.zombie_07', 'avatar', 0, '2026-09-29T00:00:00'),
+  ('frame.gold',       'frame',  1, '2026-09-29T00:00:00'),
+  ('badge.supporter',  'badge',  1, '2026-09-29T00:00:00');
+```
+
+Deleting a row removes it from the catalog; players who show it keep the ID until they change their profile.
+
+### 2. Unlock Cosmetics with a Gift Code
+
+Put the IDs into a `grants` array of the gift code's `reward_data` (1 to 10 IDs). Other keys stay your game's reward.
+
+```sql
+INSERT INTO gift_codes (id, code, reward_type, reward_data, max_redemptions, current_redemptions, created_at)
+VALUES ('6f1c0e9e-0000-4000-8000-000000000001', 'SUPPORTER', 'cosmetic',
+        '{"gold": 500, "grants": ["badge.supporter"]}', 1000, 0, '2026-09-29T00:00:00');
+```
+
+Redeeming with a Bearer session merges the grants that exist in `cosmetics` into `users.unlocks` and returns them as `grantedUnlocks` (`[]` for every other redeem response). A code with grants redeemed without session returns `401 SESSION_REQUIRED` and is not used up. A result above 25 unlocks returns `409 UNLOCK_LIMIT_REACHED`; nothing is redeemed.
+
+### 3. Unlock for a Single Player (Support Cases)
+
+`users.unlocks` is a JSON array (at most 25 IDs, `NULL` when empty):
+
+```sql
+UPDATE users SET unlocks = '["badge.supporter", "frame.gold"]' WHERE id = 'PLAYER-UUID';
+```
+
+### Error Codes
+
+Errors use the simpleServer body `{"error": true, "message": "...", "code": "..."}`:
+
+| HTTP | Code | When |
+|------|------|------|
+| 400 | `INVALID_BADGES` | More than 3 badges, or a badge listed twice |
+| 400 | `INVALID_COSMETIC_ID` | ID does not match the pattern |
+| 400 | `COSMETIC_NOT_FOUND` | ID is not in `cosmetics` |
+| 400 | `COSMETIC_TYPE_MISMATCH` | ID exists with another type than the slot |
+| 401 | `SESSION_REQUIRED` | Missing, invalid or expired session |
+| 403 | `COSMETIC_LOCKED` | Locked and not in the player's unlocks |
+| 403 | `SESSION_FORBIDDEN` | Session of another player |
+| 404 | `PLAYER_NOT_FOUND` | Unknown player |
+| 409 | `UNLOCK_LIMIT_REACHED` | Gift code redeem would exceed 25 unlocks |
 
 ## Email Sending Setup
 
@@ -523,7 +593,7 @@ horizOn-simpleServer/
 │   └── mysql.sql             # MySQL schema
 ├── src/
 │   ├── Core/
-│   │   ├── Auth.php          # API key validation
+│   │   ├── Auth.php          # API key and player session validation
 │   │   ├── Config.php        # .env parser
 │   │   ├── Database.php      # PDO abstraction + migrations
 │   │   ├── RateLimit.php     # Per-IP rate limiting
@@ -537,6 +607,7 @@ horizOn-simpleServer/
 │   ├── Leaderboard/
 │   ├── Localization/
 │   ├── News/
+│   ├── PlayerProfile/
 │   ├── RemoteConfig/
 │   ├── UserFeedback/
 │   ├── UserLogs/

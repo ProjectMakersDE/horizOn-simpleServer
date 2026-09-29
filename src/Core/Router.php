@@ -33,7 +33,7 @@ class Router
             http_response_code(204);
             header('Access-Control-Allow-Origin: *');
             header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
-            header('Access-Control-Allow-Headers: Content-Type, X-API-Key');
+            header('Access-Control-Allow-Headers: Content-Type, X-API-Key, Authorization');
             header('Access-Control-Max-Age: 86400');
             exit;
         }

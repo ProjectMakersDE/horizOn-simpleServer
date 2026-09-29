@@ -9,6 +9,10 @@ CREATE TABLE IF NOT EXISTS users (
     email VARCHAR(254),
     apple_user_id VARCHAR(255),
     is_private_relay_email TINYINT(1) NOT NULL DEFAULT 0,
+    avatar_id VARCHAR(32) NULL,
+    frame_id VARCHAR(32) NULL,
+    badges TEXT NULL,
+    unlocks TEXT NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_users_apple_user_id (apple_user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -69,6 +73,16 @@ CREATE TABLE IF NOT EXISTS gift_code_redemptions (
     FOREIGN KEY (user_id) REFERENCES users(id),
     UNIQUE KEY unique_redemption (gift_code_id, user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Player profile cosmetics catalog (one per installation), filled by SQL.
+-- cosmetic_id: 1 to 32 characters a-z 0-9 . _ - (starts with a letter or digit)
+-- type: avatar | frame | badge; locked: 0 free for every player, 1 needs an unlock
+CREATE TABLE IF NOT EXISTS cosmetics (
+    cosmetic_id VARCHAR(32) NOT NULL PRIMARY KEY,
+    type VARCHAR(10) NOT NULL,
+    locked TINYINT(1) NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
 
 CREATE TABLE IF NOT EXISTS user_feedback (
     id CHAR(36) PRIMARY KEY,
