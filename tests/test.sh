@@ -56,6 +56,8 @@ APPLE_SIGN_IN_ENABLED=false
 APPLE_TEAM_ID=
 APPLE_SERVICE_ID=
 APPLE_BUNDLE_ID=
+GIFT_CODE_LEGACY_REDEEM_ENABLED=true
+GIFT_CODE_LEGACY_REDEEM_SUNSET=2999-01-01T00:00:00Z
 EOF
 
 # Clean previous test DB
@@ -336,6 +338,63 @@ REDEEM_RESP=$(curl -s "$BASE_URL/gift-codes/redeem" \
     -d "{\"code\":\"NONEXISTENT\",\"userId\":\"$USER_ID\"}")
 assert_contains "POST /gift-codes/redeem not found returns success false" '"success":false' "$REDEEM_RESP"
 assert_contains "POST /gift-codes/redeem returns not found message" 'not found' "$REDEEM_RESP"
+
+# Redeem without session is a legacy request inside the transition window
+LEGACY_HEADERS=$(curl -s -D - -o /dev/null "$BASE_URL/gift-codes/redeem" \
+    -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
+    -d "{\"code\":\"NONEXISTENT\",\"userId\":\"$USER_ID\"}")
+assert_contains "redeem without session announces Deprecation" 'Deprecation: true' "$LEGACY_HEADERS"
+assert_contains "redeem without session announces Sunset" 'Sunset: Tue, 01 Jan 2999 00:00:00 GMT' "$LEGACY_HEADERS"
+
+# Second player with its own session
+SIGNUP2_BODY=$(curl -s "$BASE_URL/user-management/signup" \
+    -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
+    -d '{"type":"ANONYMOUS","username":"OtherPlayer"}')
+ANON_TOKEN_2=$(echo "$SIGNUP2_BODY" | php -r 'echo json_decode(file_get_contents("php://stdin"))->anonymousToken;')
+USER_ID_2=$(echo "$SIGNUP2_BODY" | php -r 'echo json_decode(file_get_contents("php://stdin"))->userId;')
+SIGNIN2_BODY=$(curl -s "$BASE_URL/user-management/signin" \
+    -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
+    -d "{\"type\":\"ANONYMOUS\",\"anonymousToken\":\"$ANON_TOKEN_2\"}")
+SESSION_TOKEN_2=$(echo "$SIGNIN2_BODY" | php -r 'echo json_decode(file_get_contents("php://stdin"))->accessToken;')
+
+# Seed a redeemable gift code directly in the test database
+php -r '$pdo = new PDO("sqlite:./data/test_horizon_integration.db");
+$stmt = $pdo->prepare("INSERT INTO gift_codes (id, code, reward_type, reward_data, max_redemptions, current_redemptions, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)");
+$stmt->execute(["gift-886", "SESSION886", "currency", "{\"gold\":5}", 10, 0, gmdate("Y-m-d\\TH:i:s")]);'
+
+# Invalid session -> 401
+REDEEM_BAD_SESSION_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/gift-codes/redeem" \
+    -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
+    -H "Authorization: Bearer invalid-session-token" \
+    -d "{\"code\":\"SESSION886\",\"userId\":\"$USER_ID\"}")
+assert_status "POST /gift-codes/redeem with invalid session" 401 "$REDEEM_BAD_SESSION_STATUS"
+
+# Session of another player -> 403, nothing is redeemed for the victim
+REDEEM_FOREIGN_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/gift-codes/redeem" \
+    -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
+    -H "Authorization: Bearer $SESSION_TOKEN_2" \
+    -d "{\"code\":\"SESSION886\",\"userId\":\"$USER_ID\"}")
+assert_status "POST /gift-codes/redeem with another player's session" 403 "$REDEEM_FOREIGN_STATUS"
+
+# Own session -> redeemed
+REDEEM_OWN_RESP=$(curl -s -w "\n%{http_code}" "$BASE_URL/gift-codes/redeem" \
+    -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
+    -H "Authorization: Bearer $SESSION_TOKEN" \
+    -d "{\"code\":\"SESSION886\",\"userId\":\"$USER_ID\"}")
+REDEEM_OWN_BODY=$(echo "$REDEEM_OWN_RESP" | sed '$d')
+REDEEM_OWN_STATUS=$(echo "$REDEEM_OWN_RESP" | tail -1)
+assert_status "POST /gift-codes/redeem with own session" 200 "$REDEEM_OWN_STATUS"
+assert_contains "own-session redeem succeeds" '"success":true' "$REDEEM_OWN_BODY"
+
+# Transition window switched off -> redeem without session is rejected
+cp .env .env.giftcode.$$
+grep -v '^GIFT_CODE_LEGACY_REDEEM_ENABLED=' .env.giftcode.$$ > .env
+echo "GIFT_CODE_LEGACY_REDEEM_ENABLED=false" >> .env
+REDEEM_STRICT_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/gift-codes/redeem" \
+    -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
+    -d "{\"code\":\"SESSION886\",\"userId\":\"$USER_ID_2\"}")
+assert_status "POST /gift-codes/redeem without session when the window is off" 401 "$REDEEM_STRICT_STATUS"
+mv .env.giftcode.$$ .env
 
 # ---- 9. User Feedback ----
 echo ""

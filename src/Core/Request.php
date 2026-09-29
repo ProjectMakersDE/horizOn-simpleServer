@@ -38,6 +38,11 @@ class Request
         if (isset($_SERVER['CONTENT_TYPE'])) {
             $this->headers['content-type'] = $_SERVER['CONTENT_TYPE'];
         }
+        // Apache with CGI/FastCGI hides the Authorization header; .htaccess passes it on
+        // as REDIRECT_HTTP_AUTHORIZATION after the rewrite to index.php.
+        if (!isset($this->headers['authorization']) && isset($_SERVER['REDIRECT_HTTP_AUTHORIZATION'])) {
+            $this->headers['authorization'] = $_SERVER['REDIRECT_HTTP_AUTHORIZATION'];
+        }
 
         // Parse JSON body
         $this->body = null;

@@ -119,6 +119,8 @@ All configuration is done via the `.env` file. Copy `.env.example` to `.env` and
 | `DB_PASS` | *(empty)* | MySQL password (MySQL only) |
 | `RATE_LIMIT_ENABLED` | `true` | Enable per-IP rate limiting |
 | `RATE_LIMIT_PER_SECOND` | `10` | Maximum requests per second per IP |
+| `GIFT_CODE_LEGACY_REDEEM_ENABLED` | `true` | Accept gift code redeem requests without a player session until the sunset (older SDKs) |
+| `GIFT_CODE_LEGACY_REDEEM_SUNSET` | `2027-03-01T00:00:00Z` | End of the transition window for redeem requests without a player session |
 | `APPLE_SIGN_IN_ENABLED` | `false` | Enable Apple Sign-In (see "Apple Sign-In Self-Hosted Setup") |
 | `APPLE_TEAM_ID` | *(empty)* | 10-character Apple Team ID |
 | `APPLE_SERVICE_ID` | *(empty)* | Apple Services ID — used as `aud` for web logins |
@@ -192,7 +194,9 @@ App read endpoints only. Translations are managed directly in the `localizations
 | Method | Endpoint | Description |
 |---|---|---|
 | POST | `/gift-codes/validate` | Check if a gift code is valid |
-| POST | `/gift-codes/redeem` | Redeem a gift code |
+| POST | `/gift-codes/redeem` | Redeem a gift code (needs the player session, see below) |
+
+`/gift-codes/redeem` is bound to the player's session: send `Authorization: Bearer <accessToken>` from sign-in. An invalid or expired session returns `401`, a session of another user `403`. Requests without any session (older SDK versions) are accepted until `GIFT_CODE_LEGACY_REDEEM_SUNSET` (default `2027-03-01T00:00:00Z`) and carry `Deprecation` and `Sunset` headers; set `GIFT_CODE_LEGACY_REDEEM_ENABLED=false` to require the session right away.
 
 ### User Feedback
 

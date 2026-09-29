@@ -4,6 +4,13 @@ declare(strict_types=1);
 
 class GiftCodesController
 {
+    /**
+     * End of the transition window in which redeem requests WITHOUT a player
+     * session (older SDK versions) are still accepted. Override with
+     * GIFT_CODE_LEGACY_REDEEM_SUNSET, switch off with GIFT_CODE_LEGACY_REDEEM_ENABLED=false.
+     */
+    private const DEFAULT_LEGACY_REDEEM_SUNSET = '2027-03-01T00:00:00Z';
+
     public static function validate(Request $request): void
     {
         $code = $request->body('code', '');
@@ -28,6 +35,9 @@ class GiftCodesController
             Response::badRequest('code and userId are required');
             return;
         }
+
+        // Bind the redemption to the player's session (exits with 401/403 otherwise)
+        self::requireRedeemSession($request, (string)$userId);
 
         $pdo = Database::connect();
 
@@ -90,6 +100,68 @@ class GiftCodesController
             'message' => 'Gift code redeemed successfully',
             'giftData' => $giftCode['reward_data'],
         ]);
+    }
+
+    /**
+     * A redeem request with an Authorization header must carry a valid, unexpired
+     * Bearer session of the body userId (401 for a missing or expired session,
+     * 403 for a session of another user). A request without any Authorization
+     * header comes from an older SDK and is only accepted during the transition window.
+     */
+    private static function requireRedeemSession(Request $request, string $userId): void
+    {
+        $authorization = trim((string)$request->header('authorization', ''));
+        if ($authorization === '') {
+            self::requireLegacyRedeemWindow($userId);
+            return;
+        }
+
+        if (stripos($authorization, 'Bearer ') !== 0) {
+            header('WWW-Authenticate: Bearer');
+            Response::unauthorized('Bearer session required');
+        }
+
+        $token = trim(substr($authorization, 7));
+        if ($token === '') {
+            header('WWW-Authenticate: Bearer');
+            Response::unauthorized('Invalid or expired session');
+        }
+
+        $pdo = Database::connect();
+        $stmt = $pdo->prepare('SELECT id, session_expires_at FROM users WHERE session_token = ?');
+        $stmt->execute([$token]);
+        $sessionUser = $stmt->fetch();
+
+        if ($sessionUser === false
+            || ($sessionUser['session_expires_at'] !== null && $sessionUser['session_expires_at'] < Database::now())
+        ) {
+            header('WWW-Authenticate: Bearer');
+            Response::unauthorized('Invalid or expired session');
+        }
+
+        if (!hash_equals((string)$sessionUser['id'], $userId)) {
+            Response::error('Session is not authorized for this redemption', 'FORBIDDEN', 403);
+        }
+    }
+
+    private static function requireLegacyRedeemWindow(string $userId): void
+    {
+        $sunset = Config::get('GIFT_CODE_LEGACY_REDEEM_SUNSET', self::DEFAULT_LEGACY_REDEEM_SUNSET);
+        $sunsetTimestamp = strtotime($sunset);
+
+        header('Deprecation: true');
+        if ($sunsetTimestamp !== false) {
+            header('Sunset: ' . gmdate('D, d M Y H:i:s', $sunsetTimestamp) . ' GMT');
+        }
+
+        $enabled = Config::getBool('GIFT_CODE_LEGACY_REDEEM_ENABLED', true);
+        if (!$enabled || $sunsetTimestamp === false || time() >= $sunsetTimestamp) {
+            header('WWW-Authenticate: Bearer');
+            Response::unauthorized('Bearer session required');
+        }
+
+        error_log('[horizOn] Gift code redeem without player session for user ' . $userId
+            . ' (legacy SDK), accepted until ' . $sunset);
     }
 
     private static function isCodeValid(string $code, string $userId): bool
