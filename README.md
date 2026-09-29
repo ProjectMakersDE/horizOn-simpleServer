@@ -47,6 +47,7 @@ This table compares the self-hosted Simple Server with the fully managed [horizO
 | Submit, top, rank, around | :white_check_mark: | :white_check_mark: |
 | Player profile in top, rank, around entries | :white_check_mark: | :white_check_mark: |
 | Leaderboard statistics & management | :x: | :white_check_mark: |
+| Validated Actions (run tickets, server rules, server-owned state, evidence; cloud only) | :x: | :white_check_mark: |
 | **Cloud Saves** | | |
 | Save & load | :white_check_mark: | :white_check_mark: |
 | **Remote Config** | | |
