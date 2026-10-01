@@ -1,8 +1,8 @@
-name: Release
+name: CI and Release
 
 on:
   push:
-    branches: [release]
+    branches: [develop, release]
 
 jobs:
   test:
