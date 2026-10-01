@@ -3,7 +3,7 @@
 # horizOn Simple Server - Integration Test Suite
 #
 # Starts a PHP built-in server, creates a temporary .env and SQLite database,
-# then runs curl tests against every endpoint. Reports pass/fail with colors.
+# then runs curl tests across the core endpoint groups. Reports pass/fail with colors.
 #
 
 set -euo pipefail
@@ -11,13 +11,12 @@ set -euo pipefail
 # Colors
 GREEN='\033[0;32m'
 RED='\033[0;31m'
-YELLOW='\033[1;33m'
 BOLD='\033[1m'
 NC='\033[0m'
 
 PASS=0
 FAIL=0
-TEST_PORT=8765
+TEST_PORT="${HORIZON_TEST_PORT:-8765}"
 BASE_URL="http://localhost:${TEST_PORT}/api/v1/app"
 API_KEY="test-key-integration-12345"
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -30,11 +29,10 @@ echo ""
 
 cd "$PROJECT_DIR"
 
-# Kill any existing PHP server on the test port
+# Never stop another test suite or application that owns the requested port.
 if lsof -i :"$TEST_PORT" > /dev/null 2>&1; then
-    echo -e "${YELLOW}Killing existing process on port ${TEST_PORT}...${NC}"
-    lsof -ti :"$TEST_PORT" | xargs kill -9 2>/dev/null || true
-    sleep 1
+    echo -e "${RED}ERROR: Port ${TEST_PORT} is already in use. Set HORIZON_TEST_PORT to a free port.${NC}"
+    exit 1
 fi
 
 # Backup existing .env if present
@@ -289,6 +287,16 @@ LOAD_RESP=$(curl -s "$BASE_URL/cloud-save/load" \
 assert_contains "POST /cloud-save/load returns found true" '"found":true' "$LOAD_RESP"
 assert_contains "cloud-save load contains level data" 'level' "$LOAD_RESP"
 
+# Updated SDKs send the signed-in player session on every Cloud Save call.
+SESSION_SAVE_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/cloud-save/save" \
+    -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" \
+    -d "{\"userId\":\"$USER_ID\",\"saveData\":\"session-save\"}")
+assert_status "Cloud Save accepts SDK POST save with Bearer session" 200 "$SESSION_SAVE_STATUS"
+SESSION_LOAD_RESP=$(curl -s "$BASE_URL/cloud-save/load" \
+    -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" \
+    -d "{\"userId\":\"$USER_ID\"}")
+assert_contains "Cloud Save accepts SDK POST load with Bearer session" '"saveData":"session-save"' "$SESSION_LOAD_RESP"
+
 # Load non-existent user
 LOAD_MISSING_RESP=$(curl -s "$BASE_URL/cloud-save/load" \
     -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
@@ -309,7 +317,178 @@ GET_RESP=$(curl -s "$BASE_URL/remote-config/nonexistent" -H "X-API-Key: $API_KEY
 assert_contains "GET /remote-config/{key} returns configKey" '"configKey":"nonexistent"' "$GET_RESP"
 assert_contains "GET /remote-config/{key} returns found false" '"found":false' "$GET_RESP"
 
-# ---- 7. News ----
+# Seed configs, including an internal SMTP credential that app endpoints must never expose.
+php -r '
+$pdo = new PDO("sqlite:./data/test_horizon_integration.db");
+$stmt = $pdo->prepare("INSERT INTO remote_configs (config_key, config_value) VALUES (?, ?)");
+foreach ([
+    ["game.max_players", "4"],
+    ["game.mode", "survival"],
+    ["ui.theme", "dark"],
+    ["smtp_config", "{\"password\":\"do-not-leak\"}"],
+    ["SMTP_CONFIG", "{\"password\":\"uppercase-do-not-leak\"}"],
+    ["smtp_config ", "{\"password\":\"whitespace-do-not-leak\"}"],
+] as $row) {
+    $stmt->execute($row);
+}
+'
+
+ALL_SEEDED_RESP=$(curl -s "$BASE_URL/remote-config/all" -H "X-API-Key: $API_KEY")
+assert_contains "remote-config all returns public configs" '"total":3' "$ALL_SEEDED_RESP"
+assert_not_contains "remote-config all hides smtp_config" 'smtp_config' "$ALL_SEEDED_RESP"
+assert_not_contains "remote-config all hides uppercase SMTP_CONFIG" 'SMTP_CONFIG' "$ALL_SEEDED_RESP"
+assert_not_contains "remote-config all hides whitespace SMTP config key" 'smtp_config ' "$ALL_SEEDED_RESP"
+assert_not_contains "remote-config all hides SMTP password" 'do-not-leak' "$ALL_SEEDED_RESP"
+assert_not_contains "remote-config all hides uppercase SMTP password" 'uppercase-do-not-leak' "$ALL_SEEDED_RESP"
+assert_not_contains "remote-config all hides whitespace SMTP password" 'whitespace-do-not-leak' "$ALL_SEEDED_RESP"
+
+GET_EXISTING_RESP=$(curl -s "$BASE_URL/remote-config/game.max_players" -H "X-API-Key: $API_KEY")
+assert_contains "GET existing remote config returns value" '"configValue":"4"' "$GET_EXISTING_RESP"
+
+GET_RESERVED_RESP=$(curl -s "$BASE_URL/remote-config/smtp_config" -H "X-API-Key: $API_KEY")
+assert_contains "GET smtp_config reports not found" '"found":false' "$GET_RESERVED_RESP"
+assert_not_contains "GET smtp_config hides SMTP password" 'do-not-leak' "$GET_RESERVED_RESP"
+
+GET_UPPERCASE_RESERVED_RESP=$(curl -s "$BASE_URL/remote-config/SMTP_CONFIG" -H "X-API-Key: $API_KEY")
+assert_contains "GET uppercase SMTP_CONFIG reports not found" '"found":false' "$GET_UPPERCASE_RESERVED_RESP"
+assert_not_contains "GET uppercase SMTP_CONFIG hides SMTP password" 'uppercase-do-not-leak' "$GET_UPPERCASE_RESERVED_RESP"
+
+FILTER_PLAIN_PREFIX_RESP=$(curl --globoff -s "$BASE_URL/remote-config/filter?pattern=game" -H "X-API-Key: $API_KEY")
+assert_contains "remote-config plain prefix filter returns two configs" '"total":2' "$FILTER_PLAIN_PREFIX_RESP"
+assert_contains "remote-config plain prefix filter reports match type" '"matchType":"PREFIX"' "$FILTER_PLAIN_PREFIX_RESP"
+
+FILTER_PREFIX_RESP=$(curl --globoff -s "$BASE_URL/remote-config/filter?pattern=game*" -H "X-API-Key: $API_KEY")
+assert_contains "remote-config prefix filter returns two configs" '"total":2' "$FILTER_PREFIX_RESP"
+assert_contains "remote-config prefix filter reports match type" '"matchType":"PREFIX"' "$FILTER_PREFIX_RESP"
+assert_not_contains "remote-config prefix filter excludes unrelated config" 'ui.theme' "$FILTER_PREFIX_RESP"
+
+FILTER_SUFFIX_RESP=$(curl --globoff -s "$BASE_URL/remote-config/filter?pattern=*theme" -H "X-API-Key: $API_KEY")
+assert_contains "remote-config suffix filter returns ui.theme" '"ui.theme":"dark"' "$FILTER_SUFFIX_RESP"
+assert_contains "remote-config suffix filter reports match type" '"matchType":"SUFFIX"' "$FILTER_SUFFIX_RESP"
+
+FILTER_CONTAINS_RESP=$(curl --globoff -s "$BASE_URL/remote-config/filter?pattern=*max*" -H "X-API-Key: $API_KEY")
+assert_contains "remote-config contains filter returns max key" '"game.max_players":"4"' "$FILTER_CONTAINS_RESP"
+assert_contains "remote-config contains filter reports match type" '"matchType":"CONTAINS"' "$FILTER_CONTAINS_RESP"
+
+FILTER_GLOB_RESP=$(curl --globoff -s "$BASE_URL/remote-config/filter?pattern=game.*players" -H "X-API-Key: $API_KEY")
+assert_contains "remote-config glob filter returns matching key" '"game.max_players":"4"' "$FILTER_GLOB_RESP"
+assert_contains "remote-config glob filter reports match type" '"matchType":"GLOB"' "$FILTER_GLOB_RESP"
+
+FILTER_RESERVED_RESP=$(curl --globoff -s "$BASE_URL/remote-config/filter?pattern=smtp*" -H "X-API-Key: $API_KEY")
+assert_contains "remote-config filter omits reserved config" '"total":0' "$FILTER_RESERVED_RESP"
+assert_not_contains "remote-config filter hides SMTP password" 'do-not-leak' "$FILTER_RESERVED_RESP"
+
+FILTER_UPPERCASE_RESERVED_RESP=$(curl --globoff -s "$BASE_URL/remote-config/filter?pattern=SMTP*" -H "X-API-Key: $API_KEY")
+assert_contains "remote-config filter omits uppercase reserved config" '"total":0' "$FILTER_UPPERCASE_RESERVED_RESP"
+assert_not_contains "remote-config filter hides uppercase SMTP password" 'uppercase-do-not-leak' "$FILTER_UPPERCASE_RESERVED_RESP"
+
+FILTER_WHITESPACE_RESERVED_RESP=$(curl --globoff -s "$BASE_URL/remote-config/filter?pattern=smtp_config*" -H "X-API-Key: $API_KEY")
+assert_contains "remote-config filter omits whitespace reserved config" '"total":0' "$FILTER_WHITESPACE_RESERVED_RESP"
+assert_not_contains "remote-config filter hides whitespace SMTP password" 'whitespace-do-not-leak' "$FILTER_WHITESPACE_RESERVED_RESP"
+
+FILTER_INVALID_RESP=$(curl --globoff -s -w "\n%{http_code}" "$BASE_URL/remote-config/filter?pattern=*" -H "X-API-Key: $API_KEY")
+FILTER_INVALID_BODY=$(echo "$FILTER_INVALID_RESP" | sed '$d')
+FILTER_INVALID_STATUS=$(echo "$FILTER_INVALID_RESP" | tail -1)
+assert_status "remote-config wildcard-only filter returns 400" 400 "$FILTER_INVALID_STATUS"
+assert_contains "invalid remote-config filter returns BAD_REQUEST" '"code":"BAD_REQUEST"' "$FILTER_INVALID_BODY"
+
+FILTER_CONSECUTIVE_RESP=$(curl --globoff -s -w "\n%{http_code}" "$BASE_URL/remote-config/filter?pattern=game**" -H "X-API-Key: $API_KEY")
+FILTER_CONSECUTIVE_BODY=$(echo "$FILTER_CONSECUTIVE_RESP" | sed '$d')
+FILTER_CONSECUTIVE_STATUS=$(echo "$FILTER_CONSECUTIVE_RESP" | tail -1)
+assert_status "remote-config consecutive wildcards return 400" 400 "$FILTER_CONSECUTIVE_STATUS"
+assert_contains "consecutive wildcard filter returns BAD_REQUEST" '"code":"BAD_REQUEST"' "$FILTER_CONSECUTIVE_BODY"
+
+# Validation rules mirror RemoteConfigService.parseFilterPattern in the hosted
+# server (source checked 2026-10-01), including literal dots and normalized text.
+FILTER_TRIM_RESP=$(curl --globoff -s "$BASE_URL/remote-config/filter?pattern=%20game%20" -H "X-API-Key: $API_KEY")
+assert_contains "remote-config filter trims the pattern" '"pattern":"game"' "$FILTER_TRIM_RESP"
+assert_contains "trimmed remote-config prefix still matches" '"total":2' "$FILTER_TRIM_RESP"
+
+FILTER_LITERAL_RESP=$(curl --globoff -s "$BASE_URL/remote-config/filter?pattern=game.max" -H "X-API-Key: $API_KEY")
+assert_contains "remote-config filter treats dots literally" '"total":1' "$FILTER_LITERAL_RESP"
+
+FILTER_NO_MATCH_RESP=$(curl --globoff -s "$BASE_URL/remote-config/filter?pattern=GAME*" -H "X-API-Key: $API_KEY")
+assert_contains "remote-config filtering is case sensitive" '"total":0' "$FILTER_NO_MATCH_RESP"
+
+FILTER_LONG_PATTERN=$(printf 'a%.0s' {1..103})
+FILTER_LONG_LITERAL=$(printf 'a%.0s' {1..101})
+for INVALID_PATTERN in "" "%20%20" "game%5B" "game%0A*" "$FILTER_LONG_PATTERN" "$FILTER_LONG_LITERAL" "a*a*a*a*a*a*a*a*a*a*a*a"; do
+    FILTER_BOUNDARY_STATUS=$(curl --globoff -s -o /dev/null -w "%{http_code}" \
+        "$BASE_URL/remote-config/filter?pattern=$INVALID_PATTERN" -H "X-API-Key: $API_KEY")
+    assert_status "remote-config rejects invalid pattern '$INVALID_PATTERN'" 400 "$FILTER_BOUNDARY_STATUS"
+done
+
+# ---- 7. Localization ----
+echo ""
+echo -e "${BOLD}--- Localization ---${NC}"
+
+php -r '
+$pdo = new PDO("sqlite:./data/test_horizon_integration.db");
+$stmt = $pdo->prepare("INSERT INTO localizations (localization_key, lang, value) VALUES (?, ?, ?)");
+foreach ([
+    ["menu.play", "en", "Play"],
+    ["menu.play", "de", "Spielen"],
+    ["menu.quit", "en", "Quit"],
+    ["menu.only_de", "de", "Nur Deutsch"],
+    ["menu.language", "zh", "Chinese"],
+    ["menu.japanese", "ja", "Japanese"],
+] as $row) {
+    $stmt->execute($row);
+}
+'
+
+LOC_DE_RESP=$(curl -s "$BASE_URL/localization/menu.play?lang=de" -H "X-API-Key: $API_KEY")
+assert_contains "localization returns requested language" '"value":"Spielen"' "$LOC_DE_RESP"
+assert_contains "localization reports requested language" '"language":"de"' "$LOC_DE_RESP"
+
+LOC_REGION_RESP=$(curl -s "$BASE_URL/localization/menu.play?lang=DE-de" -H "X-API-Key: $API_KEY")
+assert_contains "localization normalizes regional language" '"value":"Spielen"' "$LOC_REGION_RESP"
+assert_contains "regional language response reports normalized language" '"language":"de"' "$LOC_REGION_RESP"
+
+LOC_FALLBACK_RESP=$(curl -s "$BASE_URL/localization/menu.quit?lang=fr" -H "X-API-Key: $API_KEY")
+assert_contains "localization falls back to English" '"value":"Quit"' "$LOC_FALLBACK_RESP"
+assert_contains "localization reports served fallback language" '"language":"en"' "$LOC_FALLBACK_RESP"
+
+LOC_UNKNOWN_RESP=$(curl -s "$BASE_URL/localization/menu.play?lang=xx" -H "X-API-Key: $API_KEY")
+assert_contains "localization normalizes unknown language to English" '"value":"Play"' "$LOC_UNKNOWN_RESP"
+assert_contains "unknown language response reports English" '"language":"en"' "$LOC_UNKNOWN_RESP"
+
+LOC_ALL_RESP=$(curl -s "$BASE_URL/localization/all?lang=de-DE" -H "X-API-Key: $API_KEY")
+assert_contains "localization all normalizes language" '"language":"de"' "$LOC_ALL_RESP"
+assert_contains "localization all includes direct value" '"menu.play":"Spielen"' "$LOC_ALL_RESP"
+assert_contains "localization all includes English fallback" '"menu.quit":"Quit"' "$LOC_ALL_RESP"
+assert_contains "localization all reports resolved count" '"total":3' "$LOC_ALL_RESP"
+assert_not_contains "localization all omits unresolved key" 'menu.language' "$LOC_ALL_RESP"
+
+LOC_LANGUAGES_RESP=$(curl -s "$BASE_URL/localization/languages" -H "X-API-Key: $API_KEY")
+assert_contains "localization languages returns canonical present languages" '"languages":["en","de","zh","ja"]' "$LOC_LANGUAGES_RESP"
+assert_contains "localization languages returns total" '"total":4' "$LOC_LANGUAGES_RESP"
+
+LOC_MISSING_RESP=$(curl -s "$BASE_URL/localization/missing?lang=xx" -H "X-API-Key: $API_KEY")
+assert_contains "missing localization returns found false" '"found":false' "$LOC_MISSING_RESP"
+assert_contains "missing localization reports normalized language" '"language":"en"' "$LOC_MISSING_RESP"
+
+LOC_INVALID_KEY_RESP=$(curl -s -w "\n%{http_code}" "$BASE_URL/localization/invalid%20key" -H "X-API-Key: $API_KEY")
+LOC_INVALID_KEY_BODY=$(echo "$LOC_INVALID_KEY_RESP" | sed '$d')
+LOC_INVALID_KEY_STATUS=$(echo "$LOC_INVALID_KEY_RESP" | tail -1)
+assert_status "unusual localization key keeps hosted read contract" 200 "$LOC_INVALID_KEY_STATUS"
+assert_contains "unusual missing localization key returns found false" '"found":false' "$LOC_INVALID_KEY_BODY"
+
+LOC_LONG_KEY=$(printf 'a%.0s' {1..101})
+LOC_LONG_KEY_RESP=$(curl -s -w "\n%{http_code}" "$BASE_URL/localization/$LOC_LONG_KEY" -H "X-API-Key: $API_KEY")
+LOC_LONG_KEY_BODY=$(echo "$LOC_LONG_KEY_RESP" | sed '$d')
+LOC_LONG_KEY_STATUS=$(echo "$LOC_LONG_KEY_RESP" | tail -1)
+assert_status "localization key over 100 characters returns 400" 400 "$LOC_LONG_KEY_STATUS"
+assert_contains "oversized localization key returns BAD_REQUEST" '"code":"BAD_REQUEST"' "$LOC_LONG_KEY_BODY"
+
+# Array-valued query input must not trigger a PHP TypeError/500.
+LOC_ARRAY_QUERY_RESP=$(curl --globoff -s -w "\n%{http_code}" "$BASE_URL/localization/menu.play?lang[]=de" -H "X-API-Key: $API_KEY")
+LOC_ARRAY_QUERY_BODY=$(echo "$LOC_ARRAY_QUERY_RESP" | sed '$d')
+LOC_ARRAY_QUERY_STATUS=$(echo "$LOC_ARRAY_QUERY_RESP" | tail -1)
+assert_status "array-valued language query stays safe" 200 "$LOC_ARRAY_QUERY_STATUS"
+assert_contains "array-valued language query uses English default" '"value":"Play"' "$LOC_ARRAY_QUERY_BODY"
+
+# ---- 8. News ----
 echo ""
 echo -e "${BOLD}--- News ---${NC}"
 
@@ -320,7 +499,7 @@ assert_status "GET /news" 200 "$NEWS_STATUS"
 # Empty database should return empty array
 assert_contains "news returns empty array" '[]' "$NEWS_BODY"
 
-# ---- 8. Gift Codes ----
+# ---- 9. Gift Codes ----
 echo ""
 echo -e "${BOLD}--- Gift Codes ---${NC}"
 
@@ -580,7 +759,7 @@ GRANT_CAP_VALID=$(curl -s "$BASE_URL/gift-codes/validate" \
     -d "{\"code\":\"CAP881\",\"userId\":\"$USER_ID_2\"}")
 assert_contains "code over the unlock cap is not used up" '"valid":true' "$GRANT_CAP_VALID"
 
-# ---- 9. User Feedback ----
+# ---- 10. User Feedback ----
 echo ""
 echo -e "${BOLD}--- User Feedback ---${NC}"
 
@@ -592,7 +771,7 @@ FB_STATUS=$(echo "$FB_RESP" | tail -1)
 assert_status "POST /user-feedback/submit" 200 "$FB_STATUS"
 assert_contains "feedback returns ok" '"ok"' "$FB_BODY"
 
-# ---- 10. User Logs ----
+# ---- 11. User Logs ----
 echo ""
 echo -e "${BOLD}--- User Logs ---${NC}"
 
@@ -612,7 +791,7 @@ LOG_ERR_RESP=$(curl -s -w "\n%{http_code}" "$BASE_URL/user-logs/create" \
 LOG_ERR_STATUS=$(echo "$LOG_ERR_RESP" | tail -1)
 assert_status "POST /user-logs/create with errorCode" 201 "$LOG_ERR_STATUS"
 
-# ---- 11. Crash Reporting ----
+# ---- 12. Crash Reporting ----
 echo ""
 echo -e "${BOLD}--- Crash Reporting ---${NC}"
 
@@ -666,7 +845,7 @@ assert_contains "crash report returns id" '"id"' "$CRASH_BODY"
 assert_contains "crash report returns groupId" '"groupId"' "$CRASH_BODY"
 assert_contains "crash report returns createdAt" '"createdAt"' "$CRASH_BODY"
 
-# ---- 12. Apple Sign-In (disabled + bad token) ----
+# ---- 13. Apple Sign-In (disabled + bad token) ----
 echo ""
 echo -e "${BOLD}--- Apple Sign-In ---${NC}"
 
@@ -698,9 +877,27 @@ APPLE_SIGNUP_STATUS=$(echo "$APPLE_SIGNUP_RESP" | tail -1)
 assert_status "POST signup with appleIdentityToken (disabled)" 200 "$APPLE_SIGNUP_STATUS"
 assert_contains "signup apple disabled returns APPLE_NOT_CONFIGURED" '"authStatus":"APPLE_NOT_CONFIGURED"' "$APPLE_SIGNUP_BODY"
 
-# ---- 13. 404 Handling ----
+# ---- 14. Error Handling ----
 echo ""
 echo -e "${BOLD}--- Error Handling ---${NC}"
+
+SCALAR_JSON_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/user-management/signup" \
+    -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" -d '42')
+assert_status "scalar JSON body returns 400 instead of 500" 400 "$SCALAR_JSON_STATUS"
+
+ARRAY_PATTERN_STATUS=$(curl --globoff -s -o /dev/null -w "%{http_code}" \
+    "$BASE_URL/remote-config/filter?pattern[]=game" -H "X-API-Key: $API_KEY")
+assert_status "array-valued filter query returns 400 instead of 500" 400 "$ARRAY_PATTERN_STATUS"
+
+# Request must not coerce an array query to an integer such as 1.
+QUERY_INT_RESULT=$(php -r 'require "src/Core/Request.php"; $_GET = ["limit" => ["10"]]; echo (new Request())->queryInt("limit", 37);')
+assert_contains "array-valued integer query uses the caller default" '37' "$QUERY_INT_RESULT"
+
+for JSON_SCALAR in 'null' '"text"' 'true'; do
+    SCALAR_BODY_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/user-management/signup" \
+        -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" -d "$JSON_SCALAR")
+    assert_status "non-object JSON '$JSON_SCALAR' returns 400 instead of 500" 400 "$SCALAR_BODY_STATUS"
+done
 
 STATUS_404=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/nonexistent-endpoint" -H "X-API-Key: $API_KEY")
 assert_status "GET nonexistent endpoint returns 404" 404 "$STATUS_404"
@@ -708,6 +905,13 @@ assert_status "GET nonexistent endpoint returns 404" 404 "$STATUS_404"
 BODY_404=$(curl -s "$BASE_URL/totally-invalid" -H "X-API-Key: $API_KEY")
 assert_contains "404 response contains error" '"error":true' "$BODY_404"
 assert_contains "404 response contains NOT_FOUND code" '"code":"NOT_FOUND"' "$BODY_404"
+
+# This in-memory fixture covers MySQL collation aliases without contacting SMTP.
+if php tests/remote-config-collation.php; then
+    PASS=$((PASS + 1))
+else
+    FAIL=$((FAIL + 1))
+fi
 
 # ---- Summary ----
 echo ""

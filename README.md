@@ -18,7 +18,7 @@ Built for indie game developers and small studios who want full control over the
 - Apple Sign-In (iOS / Web) with local JWT verification and JWKS caching
 - Global leaderboards (submit, top, rank, around)
 - Cloud save data (up to 300KB per user)
-- Remote configuration key-value store
+- Remote configuration key-value store with wildcard filtering
 - Localization key-value store with per-language values and English fallback
 - In-app news system with language filtering
 - Gift code validation and redemption (with cosmetic unlocks via `grants`)
@@ -52,6 +52,7 @@ This table compares the self-hosted Simple Server with the fully managed [horizO
 | Save & load | :white_check_mark: | :white_check_mark: |
 | **Remote Config** | | |
 | Key-value store | :white_check_mark: | :white_check_mark: |
+| Wildcard key filtering | :white_check_mark: | :white_check_mark: |
 | **Localization** | | |
 | Key-value translations with language fallback (read) | :white_check_mark: | :white_check_mark: |
 | LLM-powered auto-translation (15 languages) | :x: | :white_check_mark: |
@@ -178,7 +179,10 @@ All endpoints are prefixed with `/api/v1/app`. Except for `/health`, all endpoin
 | Method | Endpoint | Description |
 |---|---|---|
 | GET | `/remote-config/all` | Get all configuration key-value pairs |
+| GET | `/remote-config/filter` | Get values matching `?pattern=` (`prefix`/`prefix*`, `*suffix`, `*contains*`, or a glob) |
 | GET | `/remote-config/{key}` | Get a single configuration value |
+
+The internal `smtp_config` key is never exposed by these app endpoints.
 
 ### Localization
 
@@ -189,6 +193,8 @@ App read endpoints only. Translations are managed directly in the `localizations
 | GET | `/localization/all` | Get all translations for a language (`?lang=`, default `en`) |
 | GET | `/localization/languages` | List the supported language codes (15 languages) |
 | GET | `/localization/{key}` | Get a single translation (`?lang=`, default `en`; falls back to `en` if missing) |
+
+Language values are normalized like the managed backend: for example `DE-de` becomes `de`, while unsupported values fall back to `en`.
 
 ### News
 
@@ -203,7 +209,7 @@ App read endpoints only. Translations are managed directly in the `localizations
 | POST | `/gift-codes/validate` | Check if a gift code is valid |
 | POST | `/gift-codes/redeem` | Redeem a gift code (needs the player session, see below) |
 
-`/gift-codes/redeem` is bound to the player's session: send `Authorization: Bearer <accessToken>` from sign-in. An invalid or expired session returns `401` (`SESSION_REQUIRED`), a session of another user `403` (`SESSION_FORBIDDEN`). A request without a session is rejected with `401` (`SESSION_REQUIRED`) as well; there is no transition window, so SDK versions that do not send the session (Unity up to 1.8.6, Godot up to 1.7.2) cannot redeem.
+`/gift-codes/redeem` is bound to the player's session: send `Authorization: Bearer <accessToken>` from sign-in. An invalid or expired session returns `401` (`SESSION_REQUIRED`), a session of another user `403` (`SESSION_FORBIDDEN`). A request without a session is rejected with `401` (`SESSION_REQUIRED`) as well; there is no transition window, so SDK versions that do not send the session (Unity 1.8.6, Godot 1.7.3 and MCP 1.5.5) cannot redeem.
 
 ### User Feedback
 
@@ -302,6 +308,8 @@ The Email Sending feature lets your app send template-based transactional emails
 ### 1. Configure SMTP Credentials
 
 SMTP credentials are stored in the `remote_configs` table with the key `smtp_config`. Insert a JSON object with your SMTP server details:
+
+`smtp_config` is reserved for server-internal use and is excluded from all Remote Config app responses.
 
 ```sql
 -- SQLite
@@ -567,7 +575,7 @@ SQLite requires zero configuration. The database file is created automatically a
 
 ## Running Tests
 
-An integration test script is included that starts a temporary PHP server, runs curl tests against every endpoint, and reports results:
+An integration test script is included that starts a temporary PHP server, runs curl tests across the core endpoint groups, and reports results:
 
 ```bash
 bash tests/test.sh
@@ -575,8 +583,8 @@ bash tests/test.sh
 
 The test script:
 - Creates a temporary `.env` with a test API key and SQLite database
-- Starts a PHP built-in server on port 8765
-- Runs 60 tests covering all endpoints
+- Starts a PHP built-in server on port 8765 (override with `HORIZON_TEST_PORT` if the port is occupied)
+- Runs more than 100 assertions across the supported endpoint groups
 - Cleans up all temporary files on exit
 
 ## Project Structure

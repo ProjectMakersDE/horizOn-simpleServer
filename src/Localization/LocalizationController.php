@@ -7,7 +7,7 @@ class LocalizationController
     /** Supported languages (mirrors horizOn BaaS auto-translation set). */
     private const LANGUAGES = [
         'en', 'de', 'es', 'fr', 'it', 'pt', 'nl', 'pl',
-        'ru', 'ja', 'zh', 'ar', 'ko', 'tr', 'id',
+        'ru', 'zh', 'ja', 'ar', 'ko', 'tr', 'id',
     ];
 
     private const DEFAULT_LANGUAGE = 'en';
@@ -21,7 +21,12 @@ class LocalizationController
             return;
         }
 
-        $lang = $request->query('lang', self::DEFAULT_LANGUAGE);
+        if (strlen($key) > 100) {
+            Response::badRequest('Localization key must not exceed 100 characters');
+            return;
+        }
+
+        $lang = self::normalizeLanguage($request->query('lang'));
 
         $pdo = Database::connect();
         $stmt = $pdo->prepare('SELECT value FROM localizations WHERE localization_key = ? AND lang = ?');
@@ -50,7 +55,7 @@ class LocalizationController
 
     public static function all(Request $request): void
     {
-        $lang = $request->query('lang', self::DEFAULT_LANGUAGE);
+        $lang = self::normalizeLanguage($request->query('lang'));
 
         $pdo = Database::connect();
         // Mirror the hosted backend: each key resolves to its value in the requested
@@ -91,5 +96,22 @@ class LocalizationController
             'languages' => $languages,
             'total' => count($languages),
         ]);
+    }
+
+    private static function normalizeLanguage(?string $raw): string
+    {
+        if ($raw === null || trim($raw) === '') {
+            return self::DEFAULT_LANGUAGE;
+        }
+
+        $primary = trim($raw);
+        $primary = explode(',', $primary, 2)[0];
+        $primary = explode(';', $primary, 2)[0];
+        $primary = explode('-', $primary, 2)[0];
+        $primary = strtolower(trim($primary));
+
+        return in_array($primary, self::LANGUAGES, true)
+            ? $primary
+            : self::DEFAULT_LANGUAGE;
     }
 }

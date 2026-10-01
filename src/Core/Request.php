@@ -49,7 +49,7 @@ class Request
         $rawBody = file_get_contents('php://input');
         if ($rawBody !== '' && $rawBody !== false) {
             $decoded = json_decode($rawBody, true);
-            if (json_last_error() === JSON_ERROR_NONE) {
+            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
                 $this->body = $decoded;
             }
         }
@@ -67,12 +67,18 @@ class Request
 
     public function query(string $key, ?string $default = null): ?string
     {
-        return $this->query[$key] ?? $default;
+        if (!array_key_exists($key, $this->query) || !is_scalar($this->query[$key])) {
+            return $default;
+        }
+        return (string)$this->query[$key];
     }
 
     public function queryInt(string $key, int $default = 0): int
     {
-        return isset($this->query[$key]) ? (int)$this->query[$key] : $default;
+        if (!isset($this->query[$key]) || !is_scalar($this->query[$key])) {
+            return $default;
+        }
+        return (int)$this->query[$key];
     }
 
     public function header(string $key, ?string $default = null): ?string

@@ -97,6 +97,7 @@ $router->post($prefix . '/cloud-save/load', [CloudSaveController::class, 'load']
 
 // --- Remote Config ---
 $router->get($prefix . '/remote-config/all', [RemoteConfigController::class, 'all']);
+$router->get($prefix . '/remote-config/filter', [RemoteConfigController::class, 'filter']);
 $router->get($prefix . '/remote-config/{key}', [RemoteConfigController::class, 'get']);
 
 // --- Localization ---
