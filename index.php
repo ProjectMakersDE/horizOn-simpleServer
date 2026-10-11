@@ -21,7 +21,7 @@ set_exception_handler(function (Throwable $e) {
 // CORS headers for all responses
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, X-API-Key');
+header('Access-Control-Allow-Headers: Content-Type, X-API-Key, Authorization');
 
 // Load core
 $baseDir = __DIR__;
@@ -41,6 +41,7 @@ require_once $baseDir . '/src/RemoteConfig/RemoteConfigController.php';
 require_once $baseDir . '/src/Localization/LocalizationController.php';
 require_once $baseDir . '/src/News/NewsController.php';
 require_once $baseDir . '/src/GiftCodes/GiftCodesController.php';
+require_once $baseDir . '/src/PlayerProfile/PlayerProfileController.php';
 require_once $baseDir . '/src/UserFeedback/UserFeedbackController.php';
 require_once $baseDir . '/src/UserLogs/UserLogsController.php';
 require_once $baseDir . '/src/CrashReporting/CrashReportingController.php';
@@ -96,6 +97,7 @@ $router->post($prefix . '/cloud-save/load', [CloudSaveController::class, 'load']
 
 // --- Remote Config ---
 $router->get($prefix . '/remote-config/all', [RemoteConfigController::class, 'all']);
+$router->get($prefix . '/remote-config/filter', [RemoteConfigController::class, 'filter']);
 $router->get($prefix . '/remote-config/{key}', [RemoteConfigController::class, 'get']);
 
 // --- Localization ---
@@ -109,6 +111,10 @@ $router->get($prefix . '/news', [NewsController::class, 'list']);
 // --- Gift Codes ---
 $router->post($prefix . '/gift-codes/validate', [GiftCodesController::class, 'validate']);
 $router->post($prefix . '/gift-codes/redeem', [GiftCodesController::class, 'redeem']);
+
+// --- Player Profile (needs the player's Bearer session) ---
+$router->get($prefix . '/player-profile', [PlayerProfileController::class, 'get']);
+$router->put($prefix . '/player-profile', [PlayerProfileController::class, 'set']);
 
 // --- User Feedback ---
 $router->post($prefix . '/user-feedback/submit', [UserFeedbackController::class, 'submit']);

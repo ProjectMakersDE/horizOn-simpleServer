@@ -18,10 +18,11 @@ Built for indie game developers and small studios who want full control over the
 - Apple Sign-In (iOS / Web) with local JWT verification and JWKS caching
 - Global leaderboards (submit, top, rank, around)
 - Cloud save data (up to 300KB per user)
-- Remote configuration key-value store
+- Remote configuration key-value store with wildcard filtering
 - Localization key-value store with per-language values and English fallback
 - In-app news system with language filtering
-- Gift code validation and redemption
+- Gift code validation and redemption (with cosmetic unlocks via `grants`)
+- Player profile: avatar, frame and up to 3 badges from a cosmetics catalog, shown in leaderboard entries
 - User feedback collection
 - User log ingestion (INFO, WARN, ERROR)
 - Crash reporting with automatic grouping, fingerprinting, and regression detection
@@ -44,11 +45,14 @@ This table compares the self-hosted Simple Server with the fully managed [horizO
 | Email verification & password reset | :x: | :white_check_mark: |
 | **Leaderboards** | | |
 | Submit, top, rank, around | :white_check_mark: | :white_check_mark: |
+| Player profile in top, rank, around entries | :white_check_mark: | :white_check_mark: |
 | Leaderboard statistics & management | :x: | :white_check_mark: |
+| Validated Actions (run tickets, server rules, server-owned state, evidence; cloud only) | :x: | :white_check_mark: |
 | **Cloud Saves** | | |
 | Save & load | :white_check_mark: | :white_check_mark: |
 | **Remote Config** | | |
 | Key-value store | :white_check_mark: | :white_check_mark: |
+| Wildcard key filtering | :white_check_mark: | :white_check_mark: |
 | **Localization** | | |
 | Key-value translations with language fallback (read) | :white_check_mark: | :white_check_mark: |
 | LLM-powered auto-translation (15 languages) | :x: | :white_check_mark: |
@@ -57,6 +61,12 @@ This table compares the self-hosted Simple Server with the fully managed [horizO
 | LLM-powered auto-translation (15 languages) | :x: | :white_check_mark: |
 | **Gift Codes** | | |
 | Validate & redeem | :white_check_mark: | :white_check_mark: |
+| Cosmetic unlocks via `grants` (session bound) | :white_check_mark: | :white_check_mark: |
+| Grants editor with catalog validation | :x: (SQL) | :white_check_mark: |
+| **Player Profile** | | |
+| Get & set avatar, frame, badges (same endpoints and error codes) | :white_check_mark: | :white_check_mark: |
+| Cosmetics catalog | :white_check_mark: (SQL table, no size limit) | :white_check_mark: (dashboard, per API key, tier limit) |
+| Grant & revoke unlocks per player | :x: (SQL) | :white_check_mark: |
 | **User Feedback** | | |
 | Feedback submission | :white_check_mark: | :white_check_mark: |
 | **User Logs** | | |
@@ -153,9 +163,9 @@ All endpoints are prefixed with `/api/v1/app`. Except for `/health`, all endpoin
 | Method | Endpoint | Description |
 |---|---|---|
 | POST | `/leaderboard/submit` | Submit or update a score |
-| GET | `/leaderboard/top` | Get top leaderboard entries |
-| GET | `/leaderboard/rank` | Get a user's rank |
-| GET | `/leaderboard/around` | Get entries around a user's position |
+| GET | `/leaderboard/top` | Get top leaderboard entries (each with the player `profile`) |
+| GET | `/leaderboard/rank` | Get a user's rank (with `profile`) |
+| GET | `/leaderboard/around` | Get entries around a user's position (each with `profile`) |
 
 ### Cloud Save
 
@@ -169,7 +179,10 @@ All endpoints are prefixed with `/api/v1/app`. Except for `/health`, all endpoin
 | Method | Endpoint | Description |
 |---|---|---|
 | GET | `/remote-config/all` | Get all configuration key-value pairs |
+| GET | `/remote-config/filter` | Get values matching `?pattern=` (`prefix`/`prefix*`, `*suffix`, `*contains*`, or a glob) |
 | GET | `/remote-config/{key}` | Get a single configuration value |
+
+The internal `smtp_config` key is never exposed by these app endpoints.
 
 ### Localization
 
@@ -180,6 +193,8 @@ App read endpoints only. Translations are managed directly in the `localizations
 | GET | `/localization/all` | Get all translations for a language (`?lang=`, default `en`) |
 | GET | `/localization/languages` | List the supported language codes (15 languages) |
 | GET | `/localization/{key}` | Get a single translation (`?lang=`, default `en`; falls back to `en` if missing) |
+
+Language values are normalized like the managed backend: for example `DE-de` becomes `de`, while unsupported values fall back to `en`.
 
 ### News
 
@@ -192,7 +207,9 @@ App read endpoints only. Translations are managed directly in the `localizations
 | Method | Endpoint | Description |
 |---|---|---|
 | POST | `/gift-codes/validate` | Check if a gift code is valid |
-| POST | `/gift-codes/redeem` | Redeem a gift code |
+| POST | `/gift-codes/redeem` | Redeem a gift code (needs the player session, see below) |
+
+`/gift-codes/redeem` is bound to the player's session: send `Authorization: Bearer <accessToken>` from sign-in. An invalid or expired session returns `401` (`SESSION_REQUIRED`), a session of another user `403` (`SESSION_FORBIDDEN`). A request without a session is rejected with `401` (`SESSION_REQUIRED`) as well; there is no transition window, so SDK versions that do not send the session (Unity 1.8.6, Godot 1.7.3 and MCP 1.5.5) cannot redeem.
 
 ### User Feedback
 
@@ -222,6 +239,68 @@ App read endpoints only. Translations are managed directly in the `localizations
 | GET | `/email-sending/{emailId}` | Get email status |
 | POST | `/email-sending/ticker` | Process pending emails (cron endpoint) |
 
+### Player Profile
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/player-profile?userId=` | Profile, unlocks and the cosmetics catalog with an `available` flag per entry |
+| PUT | `/player-profile` | Replace the whole profile (`userId`, `avatarId`, `frameId`, `badges`) |
+
+Both need `Authorization: Bearer <accessToken>` of `userId` (no transition window). See "Player Profile Setup" below.
+
+## Player Profile Setup
+
+Players pick an avatar, an optional frame and up to 3 badges. The server stores IDs only; your game maps them to its own art and treats unknown IDs as "not set". Same JSON shapes, caps and error codes as horizOn; simpleServer has one catalog per installation, no catalog size limit and no dashboard.
+
+### 1. Fill the Cosmetics Catalog
+
+IDs: 1 to 32 characters, `a-z`, `0-9`, `.`, `_`, `-`, starting with a letter or digit. `type` is `avatar`, `frame` or `badge`. `locked = 0` is free for every player, `locked = 1` needs an unlock.
+
+```sql
+INSERT INTO cosmetics (cosmetic_id, type, locked, created_at) VALUES
+  ('avatar.zombie_07', 'avatar', 0, '2026-09-29T00:00:00'),
+  ('frame.gold',       'frame',  1, '2026-09-29T00:00:00'),
+  ('badge.supporter',  'badge',  1, '2026-09-29T00:00:00');
+```
+
+Deleting a row removes it from the catalog; players who show it keep the ID until they change their profile.
+
+### 2. Unlock Cosmetics with a Gift Code
+
+Put the IDs into a `grants` array of the gift code's `reward_data` (1 to 10 IDs). Other keys stay your game's reward.
+
+```sql
+INSERT INTO gift_codes (id, code, reward_type, reward_data, max_redemptions, current_redemptions, created_at)
+VALUES ('6f1c0e9e-0000-4000-8000-000000000001', 'SUPPORTER', 'cosmetic',
+        '{"gold": 500, "grants": ["badge.supporter"]}', 1000, 0, '2026-09-29T00:00:00');
+```
+
+Redeeming with a Bearer session merges the grants that exist in `cosmetics` into `users.unlocks` and returns them as `grantedUnlocks` (`[]` for every other redeem response). A code with grants redeemed without session returns `401 SESSION_REQUIRED` and is not used up. A result above 25 unlocks returns `409 UNLOCK_LIMIT_REACHED`; nothing is redeemed.
+
+### 3. Unlock for a Single Player (Support Cases)
+
+`users.unlocks` is a JSON array (at most 25 IDs, `NULL` when empty):
+
+```sql
+UPDATE users SET unlocks = '["badge.supporter", "frame.gold"]' WHERE id = 'PLAYER-UUID';
+```
+
+### Error Codes
+
+Errors use the simpleServer body `{"error": true, "message": "...", "code": "..."}`:
+
+| HTTP | Code | When |
+|------|------|------|
+| 400 | `INVALID_BADGES` | More than 3 badges, or a badge listed twice |
+| 400 | `INVALID_COSMETIC_ID` | ID does not match the pattern |
+| 400 | `COSMETIC_NOT_FOUND` | ID is not in `cosmetics` |
+| 400 | `COSMETIC_TYPE_MISMATCH` | ID exists with another type than the slot |
+| 401 | `SESSION_REQUIRED` | Missing, invalid or expired session |
+| 403 | `COSMETIC_LOCKED` | Locked and not in the player's unlocks |
+| 403 | `SESSION_FORBIDDEN` | Session of another player |
+| 404 | `PLAYER_NOT_FOUND` | Unknown player |
+| 409 | `UNLOCK_LIMIT_REACHED` | Gift code redeem would exceed 25 unlocks |
+
 ## Email Sending Setup
 
 The Email Sending feature lets your app send template-based transactional emails to registered users via your own SMTP server. Templates and SMTP credentials are stored in the local database.
@@ -229,6 +308,8 @@ The Email Sending feature lets your app send template-based transactional emails
 ### 1. Configure SMTP Credentials
 
 SMTP credentials are stored in the `remote_configs` table with the key `smtp_config`. Insert a JSON object with your SMTP server details:
+
+`smtp_config` is reserved for server-internal use and is excluded from all Remote Config app responses.
 
 ```sql
 -- SQLite
@@ -494,7 +575,7 @@ SQLite requires zero configuration. The database file is created automatically a
 
 ## Running Tests
 
-An integration test script is included that starts a temporary PHP server, runs curl tests against every endpoint, and reports results:
+An integration test script is included that starts a temporary PHP server, runs curl tests across the core endpoint groups, and reports results:
 
 ```bash
 bash tests/test.sh
@@ -502,8 +583,8 @@ bash tests/test.sh
 
 The test script:
 - Creates a temporary `.env` with a test API key and SQLite database
-- Starts a PHP built-in server on port 8765
-- Runs 60 tests covering all endpoints
+- Starts a PHP built-in server on port 8765 (override with `HORIZON_TEST_PORT` if the port is occupied)
+- Runs more than 100 assertions across the supported endpoint groups
 - Cleans up all temporary files on exit
 
 ## Project Structure
@@ -519,7 +600,7 @@ horizOn-simpleServer/
 │   └── mysql.sql             # MySQL schema
 ├── src/
 │   ├── Core/
-│   │   ├── Auth.php          # API key validation
+│   │   ├── Auth.php          # API key and player session validation
 │   │   ├── Config.php        # .env parser
 │   │   ├── Database.php      # PDO abstraction + migrations
 │   │   ├── RateLimit.php     # Per-IP rate limiting
@@ -533,6 +614,7 @@ horizOn-simpleServer/
 │   ├── Leaderboard/
 │   ├── Localization/
 │   ├── News/
+│   ├── PlayerProfile/
 │   ├── RemoteConfig/
 │   ├── UserFeedback/
 │   ├── UserLogs/

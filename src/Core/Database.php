@@ -61,6 +61,13 @@ class Database
         self::addColumnIfNotExists($pdo, $driver, 'users', 'apple_user_id', 'TEXT', 'VARCHAR(255)');
         self::addColumnIfNotExists($pdo, $driver, 'users', 'is_private_relay_email', 'INTEGER DEFAULT 0', 'TINYINT(1) NOT NULL DEFAULT 0');
         self::createIndexIfNotExists($pdo, $driver, 'idx_users_apple_user_id', 'users', 'apple_user_id');
+
+        // Player profile columns (TASK-881): selected avatar, frame, badges (JSON array)
+        // and server-written unlocks (JSON array). NULL while empty.
+        self::addColumnIfNotExists($pdo, $driver, 'users', 'avatar_id', 'TEXT', 'VARCHAR(32) NULL');
+        self::addColumnIfNotExists($pdo, $driver, 'users', 'frame_id', 'TEXT', 'VARCHAR(32) NULL');
+        self::addColumnIfNotExists($pdo, $driver, 'users', 'badges', 'TEXT', 'TEXT NULL');
+        self::addColumnIfNotExists($pdo, $driver, 'users', 'unlocks', 'TEXT', 'TEXT NULL');
     }
 
     private static function createIndexIfNotExists(PDO $pdo, string $driver, string $indexName, string $table, string $column): void

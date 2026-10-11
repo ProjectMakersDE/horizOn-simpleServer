@@ -313,11 +313,18 @@ class EmailSendingController
 
     private static function getSmtpConfig(PDO $pdo): ?array
     {
-        $stmt = $pdo->prepare("SELECT config_value FROM remote_configs WHERE config_key = 'smtp_config'");
-        $stmt->execute();
+        $stmt = $pdo->prepare('SELECT config_key, config_value FROM remote_configs WHERE config_key = ?');
+        $stmt->execute(['smtp_config']);
         $row = $stmt->fetch();
 
-        if ($row === false || $row['config_value'] === null || $row['config_value'] === '') {
+        // MySQL's default utf8mb4 collation treats case and trailing spaces as
+        // equivalent. Only the byte-exact, documented key may activate SMTP.
+        if (
+            $row === false
+            || !hash_equals('smtp_config', (string)$row['config_key'])
+            || $row['config_value'] === null
+            || $row['config_value'] === ''
+        ) {
             return null;
         }
 

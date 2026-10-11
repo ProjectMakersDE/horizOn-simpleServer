@@ -55,7 +55,7 @@ class LeaderboardController
 
         $pdo = Database::connect();
         $stmt = $pdo->prepare(
-            'SELECT l.score, u.display_name as username
+            'SELECT l.score, u.display_name as username, u.avatar_id, u.frame_id, u.badges
              FROM leaderboard l
              JOIN users u ON l.user_id = u.id
              ORDER BY l.score DESC
@@ -70,6 +70,7 @@ class LeaderboardController
                 'position' => $i + 1,
                 'username' => $row['username'],
                 'score' => (int)$row['score'],
+                'profile' => PlayerProfileController::profileFromRow($row),
             ];
         }
 
@@ -89,7 +90,7 @@ class LeaderboardController
 
         // Get user's score
         $stmt = $pdo->prepare(
-            'SELECT l.score, u.display_name as username
+            'SELECT l.score, u.display_name as username, u.avatar_id, u.frame_id, u.badges
              FROM leaderboard l
              JOIN users u ON l.user_id = u.id
              WHERE l.user_id = ?'
@@ -102,6 +103,7 @@ class LeaderboardController
                 'position' => 0,
                 'username' => '',
                 'score' => 0,
+                'profile' => PlayerProfileController::emptyProfile(),
             ]);
             return;
         }
@@ -115,6 +117,7 @@ class LeaderboardController
             'position' => $rank,
             'username' => $user['username'],
             'score' => (int)$user['score'],
+            'profile' => PlayerProfileController::profileFromRow($user),
         ]);
     }
 
@@ -154,7 +157,7 @@ class LeaderboardController
         $limit = $range * 2 + 1;
 
         $stmt = $pdo->prepare(
-            'SELECT l.score, u.display_name as username
+            'SELECT l.score, u.display_name as username, u.avatar_id, u.frame_id, u.badges
              FROM leaderboard l
              JOIN users u ON l.user_id = u.id
              ORDER BY l.score DESC
@@ -169,6 +172,7 @@ class LeaderboardController
                 'position' => $offset + $i + 1,
                 'username' => $row['username'],
                 'score' => (int)$row['score'],
+                'profile' => PlayerProfileController::profileFromRow($row),
             ];
         }
 
