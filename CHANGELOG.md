@@ -1,3 +1,18 @@
+# [1.4.0](https://github.com/ProjectMakersDE/horizOn-simpleServer/compare/v1.3.1...v1.4.0) (2026-10-11)
+
+
+### Bug Fixes
+
+* **ci:** test PHP compatibility before release promotion ([34e1bce](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/34e1bce782f5f9febeedcf9b53f32c5676f9b7dc))
+* **gift-codes:** bind redemption to the player session ([26cd3c9](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/26cd3c98433a28b65718e1a8e2c9250433b47530))
+* **gift-codes:** require the player session for every redemption ([51c96ed](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/51c96edcb5ccaebd5cae5ecf7b0ccf569bc2fd5d))
+* **simpleserver:** restore remote config filtering and input hardening ([0bed142](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/0bed14284a718ecc932d10b69ae12da0df96ac96))
+
+
+### Features
+
+* **player-profile:** player profile, cosmetics catalog and gift code grants ([7765d61](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/7765d61ec470946b88f08503509916d3eec89901))
+
 ## [1.3.1](https://github.com/ProjectMakersDE/horizOn-simpleServer/compare/v1.3.0...v1.3.1) (2026-09-28)
 
 
