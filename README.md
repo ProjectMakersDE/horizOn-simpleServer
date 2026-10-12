@@ -17,7 +17,7 @@ Built for indie game developers and small studios who want full control over the
 - Anonymous user authentication with session management
 - Apple Sign-In (iOS / Web) with local JWT verification and JWKS caching
 - Global leaderboards (submit, top, rank, around)
-- Cloud save data (up to 300KB per user)
+- Cloud save data (up to 300 KB per user on simpleServer, horizOn Cloud limits depend on the plan, see https://horizon.pm/pricing)
 - Remote configuration key-value store with wildcard filtering
 - Localization key-value store with per-language values and English fallback
 - In-app news system with language filtering
@@ -50,6 +50,7 @@ This table compares the self-hosted Simple Server with the fully managed [horizO
 | Validated Actions (run tickets, server rules, server-owned state, evidence; cloud only) | :x: | :white_check_mark: |
 | **Cloud Saves** | | |
 | Save & load | :white_check_mark: | :white_check_mark: |
+| Size per user | 300 KB | per plan, see https://horizon.pm/pricing |
 | **Remote Config** | | |
 | Key-value store | :white_check_mark: | :white_check_mark: |
 | Wildcard key filtering | :white_check_mark: | :white_check_mark: |
@@ -171,7 +172,7 @@ All endpoints are prefixed with `/api/v1/app`. Except for `/health`, all endpoin
 
 | Method | Endpoint | Description |
 |---|---|---|
-| POST | `/cloud-save/save` | Save user data (max 300KB) |
+| POST | `/cloud-save/save` | Save user data (max 300 KB) |
 | POST | `/cloud-save/load` | Load user data |
 
 ### Remote Config
