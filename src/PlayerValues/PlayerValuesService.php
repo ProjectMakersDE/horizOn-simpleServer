@@ -25,16 +25,30 @@ class PlayerValuesService
     private function transaction(callable $work)
     {
         $owner = !$this->pdo->inTransaction();
+        $started = false;
         try {
             if ($owner) {
                 if ($this->mysql) $this->pdo->beginTransaction();
                 else $this->pdo->exec('BEGIN IMMEDIATE');
+                $started = true;
             }
             $result = $work();
-            if ($owner) $this->pdo->commit();
+            if ($owner) {
+                // PHP 7.4/8.2 PDO does not track an SQLite BEGIN issued as SQL.
+                if ($this->mysql) $this->pdo->commit();
+                else $this->pdo->exec('COMMIT');
+                $started = false;
+            }
             return $result;
         } catch (Throwable $error) {
-            if ($owner && $this->pdo->inTransaction()) $this->pdo->rollBack();
+            if ($owner && $started) {
+                if ($this->mysql) {
+                    if ($this->pdo->inTransaction()) $this->pdo->rollBack();
+                } else {
+                    // Preserve the original failure even if SQLite already rolled back.
+                    try { $this->pdo->exec('ROLLBACK'); } catch (PDOException $ignored) {}
+                }
+            }
             if ($error instanceof PDOException && in_array((int)($error->errorInfo[1] ?? 0), [5, 6, 1205, 1213], true)) {
                 PlayerValuesLedger::fail('STATE_CONFLICT', 'Concurrent write; retry with the same operationId', 409);
             }
