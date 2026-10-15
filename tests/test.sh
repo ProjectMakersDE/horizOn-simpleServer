@@ -941,6 +941,11 @@ PV_ADMIN=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$TEST_PORT/a
 assert_status 'public app key never exposes operator configuration' 404 "$PV_ADMIN"
 if php tests/player-values.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 if php tests/player-values-bootstrap.php "$TEST_PORT"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+# The SDK preflight must distinguish an unsupported gateway from a transient transport error.
+REALTIME_RESP=$(curl -s -w "\n%{http_code}" "$BASE_URL/realtime/session" \
+    -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" -d '{}')
+assert_status "realtime preflight is explicitly unsupported" 501 "$(echo "$REALTIME_RESP" | tail -1)"
+assert_contains "realtime preflight names NOT_SUPPORTED" '"code":"NOT_SUPPORTED"' "$REALTIME_RESP"
 
 # ---- Summary ----
 echo ""

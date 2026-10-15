@@ -81,6 +81,14 @@ if ($request->path() !== $prefix . '/health' && strpos($request->path(), $prefix
     RateLimit::check($request);
 }
 
+// Realtime requires the Cloud gateway. SDKs can detect this before attempting a WebSocket.
+$realtimeUnsupported = function (Request $req) {
+    Response::error('Realtime is available in horizOn Cloud only', 'NOT_SUPPORTED', 501);
+};
+$router->post($prefix . '/realtime/session', $realtimeUnsupported);
+$router->post($prefix . '/realtime/subscriptions', $realtimeUnsupported);
+$router->get($prefix . '/realtime/socket', $realtimeUnsupported);
+
 // --- User Management ---
 $router->post($prefix . '/user-management/signup', [UserManagementController::class, 'signup']);
 $router->post($prefix . '/user-management/signin', [UserManagementController::class, 'signin']);
