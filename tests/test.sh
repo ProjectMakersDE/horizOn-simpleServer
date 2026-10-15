@@ -947,6 +947,58 @@ REALTIME_RESP=$(curl -s -w "\n%{http_code}" "$BASE_URL/realtime/session" \
 assert_status "realtime preflight is explicitly unsupported" 501 "$(echo "$REALTIME_RESP" | tail -1)"
 assert_contains "realtime preflight names NOT_SUPPORTED" '"code":"NOT_SUPPORTED"' "$REALTIME_RESP"
 
+# ---- Statistics: exact integer session batches and conditional definitions ----
+php bin/statistics.php configure 0 <<'JSON' >/dev/null
+{"definitions":[{"key":"kills","name":"Kills","mode":"sum","maxPerUpdate":10},{"key":"best_score","name":"Best","mode":"max"}]}
+JSON
+ST_MISSING=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/statistics?userId=$USER_ID" -H "X-API-Key: $API_KEY")
+assert_status 'statistics requires matching Bearer' 401 "$ST_MISSING"
+ST_DEFS_MISSING=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/statistics/definitions" -H "X-API-Key: $API_KEY")
+assert_status 'statistics definitions require Bearer' 401 "$ST_DEFS_MISSING"
+ST_FOREIGN=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/statistics?userId=00000000-0000-0000-0000-000000000001" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN")
+assert_status 'statistics rejects foreign player session' 403 "$ST_FOREIGN"
+ST_STATE=$(curl -s "$BASE_URL/statistics?userId=$USER_ID" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN")
+assert_contains 'statistics untouched values distinguish zero' '"hasValue":false' "$ST_STATE"
+assert_contains 'statistics snapshot includes operation window' '"maxFutureSkewSeconds":30' "$ST_STATE"
+ST_DEFS=$(curl -s "$BASE_URL/statistics/definitions?definitionVersion=1" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN")
+assert_contains 'statistics unchanged definitions are null' '"definitions":null' "$ST_DEFS"
+ST_OP=$(php -r 'require "src/Core/Database.php"; echo (int)floor(microtime(true)*1000), ":", Database::uuid();')
+ST_BODY=$(php -r 'echo json_encode(["userId"=>$argv[1],"operationId"=>$argv[2],"updates"=>[["key"=>"kills","value"=>3],["key"=>"best_score","value"=>9007199254740991]]]);' "$USER_ID" "$ST_OP")
+ST_APPLIED=$(curl -s "$BASE_URL/statistics" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$ST_BODY")
+assert_contains 'statistics exact maximum integer survives HTTP' '"value":9007199254740991' "$ST_APPLIED"
+assert_contains 'statistics batch advances revision once' '"revision":1' "$ST_APPLIED"
+ST_REPLAY=$(curl -s "$BASE_URL/statistics" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$ST_BODY")
+assert_contains 'statistics original batch replays' '"replayed":true' "$ST_REPLAY"
+assert_contains 'statistics replay never increments revision' '"revision":1' "$ST_REPLAY"
+for ST_NUMBER in '1.5' '"1"' 'null' '9007199254740992'; do
+    ST_BAD_BODY=$(php -r 'echo "{\"userId\":\"".$argv[1]."\",\"operationId\":\"".$argv[2]."\",\"updates\":[{\"key\":\"kills\",\"value\":".$argv[3]."}]}";' "$USER_ID" "$ST_OP" "$ST_NUMBER")
+    ST_BAD=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/statistics" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$ST_BAD_BODY")
+    assert_status "statistics rejects coerced or unsafe value $ST_NUMBER" 400 "$ST_BAD"
+done
+ST_CONFLICT_BODY=$(php -r '$d=json_decode($argv[1],true);$d["updates"][0]["value"]=4;echo json_encode($d);' "$ST_BODY")
+ST_CONFLICT=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/statistics" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$ST_CONFLICT_BODY")
+assert_status 'statistics ID payload conflict is409' 409 "$ST_CONFLICT"
+ST_ADMIN=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$TEST_PORT/api/v1/admin/statistics/definitions" -H "X-API-Key: $API_KEY")
+assert_status 'statistics operator configuration is never an app admin route' 404 "$ST_ADMIN"
+if php tests/statistics.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
+# Exercise direct existing-file dispatch, which Apache/CGI can bypass the index router for.
+# Reuse the suite's owned listener after its API checks instead of touching another port/process.
+kill "$PHP_PID"
+wait "$PHP_PID" 2>/dev/null || true
+PHP_PID=""
+php -S "localhost:${TEST_PORT}" -t "$PROJECT_DIR" > /dev/null 2>&1 &
+PHP_PID=$!
+for i in $(seq 1 10); do
+    if curl -s -o /dev/null "http://localhost:${TEST_PORT}/bin/statistics.php"; then break; fi
+    if [ "$i" -eq 10 ]; then echo 'Direct-file fixture failed to start'; exit 1; fi
+    sleep 1
+done
+ST_CLI_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TEST_PORT}/bin/statistics.php")
+assert_status 'statistics operator script rejects direct HTTP before bootstrap' 403 "$ST_CLI_STATUS"
+ST_CLI_BODY=$(curl -s "http://localhost:${TEST_PORT}/bin/statistics.php")
+if [ -z "$ST_CLI_BODY" ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); echo 'FAIL: operator script exposed response data'; fi
+
 # ---- Summary ----
 echo ""
 echo "================================"

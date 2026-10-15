@@ -29,6 +29,15 @@ class Auth
      */
     public static function requirePlayerSession(Request $request, string $userId): void
     {
+        $sessionUser = self::requirePlayerSessionUser($request);
+        if (!hash_equals($sessionUser, $userId)) {
+            Response::error('Session is not authorized for this player', 'SESSION_FORBIDDEN', 403);
+        }
+    }
+
+    /** Validates Bearer once for project-wide authenticated catalogs without a userId parameter. */
+    public static function requirePlayerSessionUser(Request $request): string
+    {
         $authorization = trim((string)$request->header('authorization', ''));
         if ($authorization === '' || stripos($authorization, 'Bearer ') !== 0) {
             self::sessionRequired('Bearer session required');
@@ -50,9 +59,7 @@ class Auth
             self::sessionRequired('Invalid or expired session');
         }
 
-        if (!hash_equals((string)$sessionUser['id'], $userId)) {
-            Response::error('Session is not authorized for this player', 'SESSION_FORBIDDEN', 403);
-        }
+        return (string)$sessionUser['id'];
     }
 
     /**

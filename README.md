@@ -23,6 +23,7 @@ Built for indie game developers and small studios who want full control over the
 - In-app news system with language filtering
 - Gift code validation and redemption (with cosmetic unlocks via `grants`)
 - Player profile: avatar, frame and up to 3 badges from a cosmetics catalog, shown in leaderboard entries
+- Explicit atomic player-statistics batches: sum/max/min/last, UTC resets and safe original-ID retries
 - User feedback collection
 - User log ingestion (INFO, WARN, ERROR)
 - Crash reporting with automatic grouping, fingerprinting, and regression detection
@@ -68,6 +69,9 @@ This table compares the self-hosted Simple Server with the fully managed [horizO
 | Get & set avatar, frame, badges (same endpoints and error codes) | :white_check_mark: | :white_check_mark: |
 | Cosmetics catalog | :white_check_mark: (SQL table, no size limit) | :white_check_mark: (dashboard, per API key, tier limit) |
 | Grant & revoke unlocks per player | :x: (SQL) | :white_check_mark: |
+| **Statistics** | | |
+| Atomic session batches, conditional catalog, UTC day/week resets | :white_check_mark: | :white_check_mark: |
+| Definition management | local operator CLI / SQL | dashboard, per-project tier limits |
 | **User Feedback** | | |
 | Feedback submission | :white_check_mark: | :white_check_mark: |
 | **User Logs** | | |
@@ -698,3 +702,38 @@ storage fixture also accepts `HORIZON_VALUES_TEST_DSN`, `HORIZON_VALUES_TEST_USE
 `HORIZON_VALUES_TEST_PASSWORD` for an isolated MySQL database named `task1004_<hex>`.
 Never point it at application data. SQLite and actual MySQL 8.4 both pass the rollback,
 replay, receipt eviction and independent-process concurrent-purchase fixture.
+
+## Player Statistics (TASK-1005)
+
+Statistics use the same explicit app REST contract and SDK managers as Cloud:
+
+| Method | Route | Input |
+|---|---|---|
+| GET | `/api/v1/app/statistics` | Query `userId`, optional `definitionVersion` |
+| GET | `/api/v1/app/statistics/definitions` | Optional query `definitionVersion` |
+| POST | `/api/v1/app/statistics` | `{userId,operationId,updates:[{key,value}]}` |
+
+All three require `X-API-Key` plus an active player Bearer session. Player-specific calls require the matching `userId`. One whole session batch updates all counters in one SQL transaction. Values must be exact JSON integers in ±9,007,199,254,740,991; duplicate keys, unknown keys, bounds and overflow reject the whole batch. This feature requires 64-bit PHP7.4+. No statistics request runs automatically at sign-in.
+
+A snapshot carries `userId`, `definitionVersion`, `definitions`, `revision`, `values:[{key,value,hasValue,period}]`, `operationWindow:{serverTimeUnixMillis,maxAgeSeconds,maxFutureSkewSeconds}`, `operationId`, `replayed` and reserved `newlyUnlocked:[]`. Definitions null means unchanged at the supplied version; retain the cached definitions. An empty catalog is `[]`. Missing counters show zero with `hasValue:false`. Min/max/last initialize from their first report. Daily resets use UTC midnight, weekly resets use ISO Monday; `period` is a date or ISO week.
+
+Persist one `<13-digit Unix milliseconds>:<UUID>` ID and the original updates before sending. After an uncertain timeout read a snapshot and retry that exact intent. Retained same-ID/same-payload receipts replay first, even after policy changes or24hours. Changed payload gives `409 OPERATION_CONFLICT`. Eight receipts are retained; their permanent eviction timestamp floor rejects old or delayed out-of-order unknown IDs with `410 OPERATION_EXPIRED`, even before24hours. Unknown IDs older than24hours or more than30seconds in the future are rejected. Never generate a replacement ID automatically for an uncertain outcome. The operation window supplies server time for clock alignment.
+
+Other errors use hosted codes: `400 INVALID_REQUEST`, `401 SESSION_REQUIRED`, `403 SESSION_FORBIDDEN`, `404 PLAYER_NOT_FOUND`, `409 STATE_CONFLICT`, and `422 UNKNOWN_STATISTIC`, `UPDATE_ABOVE_LIMIT`, `VALUE_OVERFLOW` or `OPERATION_IN_FUTURE`. HTTP429 retains the installation's existing rate-limit behavior. A stale clock cannot restore older daily/weekly data; reads, replays and writes fail closed while it is behind a stored bucket.
+
+Configuration belongs to the local installation operator. The catalog stores at most100 definitions; Cloud's per-tier billing/admin interface is hosted. Use the CLI to derive monotone catalog versions and counter generations safely:
+
+```sh
+php bin/statistics.php show
+php bin/statistics.php configure 0 < statistics.json
+```
+
+```json
+{"definitions":[{"key":"kills","name":"Kills","mode":"sum","maxPerUpdate":1000},{"key":"best_score","name":"Best score","mode":"max"},{"key":"rounds_today","name":"Rounds today","mode":"sum","reset":"daily"}]}
+```
+
+`configure` requires the current `definitionVersion`, including zero initially. Keys use1..24 lowercase ASCII letters/digits/`._-`, beginning with a letter or digit; names use1..80UTF-8bytes. Modes are `sum|max|min|last`, reset is `none|daily|weekly`, and `maxPerUpdate` is an optional positive absolute update bound. Renames and bound edits preserve counters. Mode/reset changes or delete/recreate create a new generation. Avoid editing SQL catalog generation/version fields manually; the CLI updates them atomically. There is no app/admin HTTP configuration route.
+
+Storage uses one small singleton catalog row and one `statistics_state` JSON row per player. Existing users are not scanned or rewritten at reset/configuration time. A normal write reads the user lock, catalog and one state row, then writes one state row; the shared Bearer check is one additional read. MySQL locks only the target user plus a shared catalog lock. SQLite uses one writer transaction. The common PDO owner can roll back the counter, revision, receipt and eviction floor together. Deleting a user cascades its own statistics row. No cloud save or profile blob is read.
+
+`bash tests/test.sh` covers the HTTP surface. `php tests/statistics.php` covers real SQLite concurrency, receipt eviction, UTC/generation fencing, atomic overflow and outer-transaction rollback. MySQL probes require an explicit `HORIZON_STATISTICS_TEST_DSN` naming a dedicated `task1005_<hex>` database, plus `HORIZON_STATISTICS_TEST_USER`/`HORIZON_STATISTICS_TEST_PASSWORD`; they never fall back to a real installation. Realtime/chat keep their Cloud-only boundary.

@@ -43,6 +43,7 @@ require_once $baseDir . '/src/News/NewsController.php';
 require_once $baseDir . '/src/GiftCodes/GiftCodesController.php';
 require_once $baseDir . '/src/PlayerProfile/PlayerProfileController.php';
 require_once $baseDir . '/src/PlayerValues/PlayerValuesController.php';
+require_once $baseDir . '/src/Statistics/StatisticsController.php';
 require_once $baseDir . '/src/UserFeedback/UserFeedbackController.php';
 require_once $baseDir . '/src/UserLogs/UserLogsController.php';
 require_once $baseDir . '/src/CrashReporting/CrashReportingController.php';
@@ -130,6 +131,11 @@ $router->get($prefix . '/player-values', [PlayerValuesController::class, 'get'])
 $router->get($prefix . '/player-values/offers', [PlayerValuesController::class, 'offers']);
 $router->post($prefix . '/player-values/purchase', [PlayerValuesController::class, 'purchase']);
 $router->post($prefix . '/player-values/adjust', [PlayerValuesController::class, 'adjust']);
+
+// --- Statistics: one explicit atomic session batch, matching Bearer required ---
+$router->get($prefix . '/statistics/definitions', [StatisticsController::class, 'definitions']);
+$router->get($prefix . '/statistics', [StatisticsController::class, 'get']);
+$router->post($prefix . '/statistics', [StatisticsController::class, 'update']);
 
 // --- User Feedback ---
 $router->post($prefix . '/user-feedback/submit', [UserFeedbackController::class, 'submit']);
