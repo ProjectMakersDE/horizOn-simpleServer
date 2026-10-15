@@ -737,3 +737,63 @@ php bin/statistics.php configure 0 < statistics.json
 Storage uses one small singleton catalog row and one `statistics_state` JSON row per player. Existing users are not scanned or rewritten at reset/configuration time. A normal write reads the user lock, catalog and one state row, then writes one state row; the shared Bearer check is one additional read. MySQL locks only the target user plus a shared catalog lock. SQLite uses one writer transaction. The common PDO owner can roll back the counter, revision, receipt and eviction floor together. Deleting a user cascades its own statistics row. No cloud save or profile blob is read.
 
 `bash tests/test.sh` covers the HTTP surface. `php tests/statistics.php` covers real SQLite concurrency, receipt eviction, UTC/generation fencing, atomic overflow and outer-transaction rollback. MySQL probes require an explicit `HORIZON_STATISTICS_TEST_DSN` naming a dedicated `task1005_<hex>` database, plus `HORIZON_STATISTICS_TEST_USER`/`HORIZON_STATISTICS_TEST_PASSWORD`; they never fall back to a real installation. Realtime/chat keep their Cloud-only boundary.
+
+## Inbox (Develop)
+
+The authenticated app routes are `GET /api/v1/app/inbox?userId=UUID&since=CURSOR`,
+`POST /api/v1/app/inbox/read`, `/inbox/claim` and `/inbox/remove`. Actions take
+`{userId,entryId}` and require that player's active Bearer session plus the installation API
+key. A snapshot includes an opaque cursor, revisions, current `serverTime`, per-type counters,
+limits and `pollAfterSeconds:120`. A matching cursor returns `unchanged:true` with empty
+entries: preserve the existing client list. A changed snapshot replaces it, including removals.
+Expiry transitions change the cursor without database writes. Realtime remains Cloud-only.
+
+Each player has at most 50 targeted messages. One installation-wide catalogue retains at most
+500 broadcasts without fanout. Per-player interaction markers are bounded to 500; reward
+markers remain pinned. Messages have a serialized 1024-byte UTF-8 budget, at most 8 distinct
+positive safe-integer value rewards, and at most 30 days normal lifetime. Unclaimed rewards
+become overdue but remain visible/claimable. They cannot be removed. Reward broadcasts stay
+retained and cannot be deleted, even after individual players claim them; they consume capacity.
+A full inbox rejects delivery so the source can remain pending. Unknown reward kinds/keys or
+amounts above the configured maximum balance are rejected before accepting delivery.
+
+Claims use the entry ID as permanent action identity. The claim guard and player-value ledger
+share one explicitly connection-bound `SqlTransaction`, including SQLite 7.4's SQL
+`BEGIN IMMEDIATE`/`COMMIT`/`ROLLBACK`. A failed grant rolls both effects back. A lost commit
+acknowledgement returns 409 `STATE_CONFLICT`: retry the same entry ID. The marker prevents
+another grant after value receipts expire or are evicted. Removing a claimed entry never
+allows regrant. JSON strings, fractions and unsafe amounts are rejected.
+
+Broadcast/support administration is local CLI only; the public app key cannot authorize it:
+
+```bash
+php bin/inbox.php broadcasts
+php bin/inbox.php player PLAYER_UUID
+php bin/inbox.php publish EXPECTED_REVISION < persisted-publication.json
+php bin/inbox.php remove-broadcast EXPECTED_REVISION broadcast:UUID
+```
+
+A publication JSON contains `operationId` (`unixMillis:UUID`), `type`, `reference`, `textKey`,
+`parameters`, `expiresAt` (ISO instant), and optional `attachment:{values:[{key,amount}]}`.
+Use the catalogue's current server time to create the ID/expiry, persist the whole intent before
+publishing, and retry it unchanged. A retained identical operation replays before stale revision,
+capacity or expiry checks. Delivery/publication retain 50 receipts, a 30-day window and a permanent
+eviction floor; unknown old/out-of-order operations fail closed. New anonymous/Apple accounts
+record millisecond registration times, so accounts created after publication are ineligible even
+within the same second. Existing installations retain their legacy UTC registration date.
+
+Internal source owners use `InboxService::deliver(userId, content, operationId, issuedAtMillis,
+source)` with their persisted intent. When source state changes too, construct both services with
+the same `SqlTransaction` instance. `deliverPending(..., complete)` is reserved for durable
+pending returns: its adapter receives the exact PDO and proposed entry ID and must conditionally
+mark that specific source/recipient delivered. A false guard rolls back the inbox write. Only this
+path can deliver an old valuable return below the usual receipt floor/window. Never invent a new
+operation ID to bypass an uncertain result. No public HTTP delivery/grant endpoint exists.
+
+The PHP implementation reads the complete bounded catalogue rather than a cache. Snapshot
+feature I/O is three small/bounded reads (player, catalogue, state); a normal interaction adds one
+state write. A normal reward claim additionally uses the existing player-values reads and one
+ledger write in the same transaction. Shared API authentication and migration checks are separate.
+SQL state is deleted with its owning user through foreign-key cascade. Run `php tests/inbox.php`
+for actual storage/rollback/concurrent-claim/publication/receipt/retention proofs, and
+`HORIZON_TEST_PORT=18765 bash tests/test.sh` for authenticated HTTP parity and CLI isolation.

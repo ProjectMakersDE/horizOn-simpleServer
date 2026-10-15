@@ -55,6 +55,9 @@ class Database
         $pdo->exec($sql);
         self::ensurePlayerValuesConfig($pdo);
         self::ensureStatisticsConfig($pdo);
+        self::ensureInboxConfig($pdo);
+        // Millisecond registration cutoff prevents a post-publication signup in the same second qualifying.
+        self::addColumnIfNotExists($pdo, $driver, 'users', 'created_at_millis', 'INTEGER', 'BIGINT NULL');
 
         // Add email column to users table if it doesn't exist (for Email Sending)
         self::addColumnIfNotExists($pdo, $driver, 'users', 'email', 'TEXT', 'VARCHAR(254)');
@@ -87,6 +90,16 @@ class Database
         $insert = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql' ? 'INSERT IGNORE' : 'INSERT OR IGNORE';
         $pdo->exec($insert . " INTO statistics_catalog(id, version, definitions) VALUES (1, 0, '[]')");
     }
+
+    public static function ensureInboxConfig(PDO $pdo): void
+    {
+        if ($pdo->query('SELECT id FROM inbox_catalog WHERE id = 1')->fetch() !== false) return;
+        $insert = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql' ? 'INSERT IGNORE' : 'INSERT OR IGNORE';
+        $state = ['apiKeyId' => self::uuid(), 'revision' => 0, 'entries' => [], 'receipts' => [], 'evictedThroughMillis' => 0];
+        $pdo->prepare($insert . ' INTO inbox_catalog(id,data) VALUES (1,?)')->execute([json_encode($state, JSON_THROW_ON_ERROR)]);
+    }
+
+    public static function nowMillis(): int { return (int)floor(microtime(true) * 1000); }
 
     private static function createIndexIfNotExists(PDO $pdo, string $driver, string $indexName, string $table, string $column): void
     {
