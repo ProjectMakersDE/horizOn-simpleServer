@@ -42,6 +42,7 @@ require_once $baseDir . '/src/Localization/LocalizationController.php';
 require_once $baseDir . '/src/News/NewsController.php';
 require_once $baseDir . '/src/GiftCodes/GiftCodesController.php';
 require_once $baseDir . '/src/PlayerProfile/PlayerProfileController.php';
+require_once $baseDir . '/src/PlayerValues/PlayerValuesController.php';
 require_once $baseDir . '/src/UserFeedback/UserFeedbackController.php';
 require_once $baseDir . '/src/UserLogs/UserLogsController.php';
 require_once $baseDir . '/src/CrashReporting/CrashReportingController.php';
@@ -123,6 +124,12 @@ $router->post($prefix . '/gift-codes/redeem', [GiftCodesController::class, 'rede
 // --- Player Profile (needs the player's Bearer session) ---
 $router->get($prefix . '/player-profile', [PlayerProfileController::class, 'get']);
 $router->put($prefix . '/player-profile', [PlayerProfileController::class, 'set']);
+
+// --- Player Values (Bearer session, exact integers, stable operation IDs) ---
+$router->get($prefix . '/player-values', [PlayerValuesController::class, 'get']);
+$router->get($prefix . '/player-values/offers', [PlayerValuesController::class, 'offers']);
+$router->post($prefix . '/player-values/purchase', [PlayerValuesController::class, 'purchase']);
+$router->post($prefix . '/player-values/adjust', [PlayerValuesController::class, 'adjust']);
 
 // --- User Feedback ---
 $router->post($prefix . '/user-feedback/submit', [UserFeedbackController::class, 'submit']);
