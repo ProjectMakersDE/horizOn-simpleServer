@@ -982,6 +982,46 @@ ST_ADMIN=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$TEST_PORT/a
 assert_status 'statistics operator configuration is never an app admin route' 404 "$ST_ADMIN"
 if php tests/statistics.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
+# ---- Inbox REST parity ----
+INB_NO_SESSION=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/inbox?userId=$USER_ID" -H "X-API-Key: $API_KEY")
+assert_status 'inbox requires player Bearer' 401 "$INB_NO_SESSION"
+INB_FOREIGN=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/inbox?userId=00000000-0000-0000-0000-000000000001" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN")
+assert_status 'inbox forbids foreign player' 403 "$INB_FOREIGN"
+INB_EMPTY=$(curl -s "$BASE_URL/inbox?userId=$USER_ID" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN")
+assert_contains 'inbox supplies polling interval' '"pollAfterSeconds":120' "$INB_EMPTY"
+assert_contains 'empty inbox counts are JSON object' '"counts":{}' "$INB_EMPTY"
+INB_LONG_SINCE=$(php -r 'echo str_repeat("x",129);')
+INB_BAD_SINCE=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/inbox?userId=$USER_ID&since=$INB_LONG_SINCE" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN")
+assert_status 'inbox rejects oversized since' 400 "$INB_BAD_SINCE"
+INB_MESSAGE=$(php -r 'require "src/Core/Config.php"; require "src/Core/Database.php"; require "src/Inbox/InboxService.php"; Config::load(".env"); $n=Database::nowMillis(); $r=(new InboxService(Database::connect()))->deliver($argv[1],["type"=>"turn","textKey"=>"turn.ready","expiresAt"=>InboxRules::instant($n+60000)],"http-turn",$n,"http-test");echo $r["entryId"];' "$USER_ID")
+INB_READ_BODY=$(php -r 'echo json_encode(["userId"=>$argv[1],"entryId"=>$argv[2]]);' "$USER_ID" "$INB_MESSAGE")
+INB_READ=$(curl -s "$BASE_URL/inbox/read" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$INB_READ_BODY")
+assert_contains 'inbox read persists flag' '"read":true' "$INB_READ"
+INB_CURSOR=$(php -r 'echo json_decode($argv[1],true)["cursor"];' "$INB_READ")
+INB_UNCHANGED=$(curl -s "$BASE_URL/inbox?userId=$USER_ID&since=$INB_CURSOR" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN")
+assert_contains 'inbox cursor unchanged retains metadata' '"unchanged":true' "$INB_UNCHANGED"
+assert_contains 'unchanged inbox entries intentionally empty' '"entries":[]' "$INB_UNCHANGED"
+INB_PUB_BODY=$(php -r 'require "src/Core/Database.php";require "src/Inbox/InboxRules.php";$n=Database::nowMillis();echo json_encode(["operationId"=>$n.":".Database::uuid(),"type"=>"reward","textKey"=>"reward.ready","expiresAt"=>InboxRules::instant($n+60000),"attachment"=>["values"=>[["key"=>"gold","amount"=>2]]]]);')
+INB_PUB=$(php bin/inbox.php publish 0 <<< "$INB_PUB_BODY")
+assert_contains 'operator publication provides fresh serverTime' '"serverTime":' "$INB_PUB"
+INB_REWARD=$(php -r 'echo json_decode($argv[1],true)["operation"]["entryId"];' "$INB_PUB")
+INB_CLAIM_BODY=$(php -r 'echo json_encode(["userId"=>$argv[1],"entryId"=>$argv[2]]);' "$USER_ID" "$INB_REWARD")
+INB_PROTECTED=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/inbox/remove" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$INB_CLAIM_BODY")
+assert_status 'inbox protects unclaimed reward' 409 "$INB_PROTECTED"
+INB_CLAIM=$(curl -s "$BASE_URL/inbox/claim" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$INB_CLAIM_BODY")
+assert_contains 'inbox claim atomically returns values' '"playerValues":' "$INB_CLAIM"
+assert_contains 'first inbox claim applies once' '"replayed":false' "$INB_CLAIM"
+INB_REPLAY=$(curl -s "$BASE_URL/inbox/claim" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$INB_CLAIM_BODY")
+assert_contains 'duplicate inbox claim replays' '"replayed":true' "$INB_REPLAY"
+INB_REMOVED=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/inbox/remove" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$INB_CLAIM_BODY")
+assert_status 'claimed reward can be removed' 200 "$INB_REMOVED"
+INB_AFTER_REMOVE=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/inbox/claim" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$INB_CLAIM_BODY")
+assert_status 'removed reward cannot regrant' 404 "$INB_AFTER_REMOVE"
+INB_ADMIN=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$TEST_PORT/api/v1/admin/inbox/broadcasts" -H "X-API-Key: $API_KEY")
+assert_status 'inbox operator routes are not public app administration' 404 "$INB_ADMIN"
+if php tests/inbox.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/inbox-migration.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
 # Exercise direct existing-file dispatch, which Apache/CGI can bypass the index router for.
 # Reuse the suite's owned listener after its API checks instead of touching another port/process.
 kill "$PHP_PID"
@@ -998,6 +1038,11 @@ ST_CLI_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TEST_
 assert_status 'statistics operator script rejects direct HTTP before bootstrap' 403 "$ST_CLI_STATUS"
 ST_CLI_BODY=$(curl -s "http://localhost:${TEST_PORT}/bin/statistics.php")
 if [ -z "$ST_CLI_BODY" ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); echo 'FAIL: operator script exposed response data'; fi
+
+INB_CLI_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TEST_PORT}/bin/inbox.php")
+assert_status 'inbox operator rejects direct HTTP before bootstrap' 403 "$INB_CLI_STATUS"
+INB_CLI_BODY=$(curl -s "http://localhost:${TEST_PORT}/bin/inbox.php")
+if [ -z "$INB_CLI_BODY" ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); echo 'FAIL: inbox operator exposed data'; fi
 
 # ---- Summary ----
 echo ""

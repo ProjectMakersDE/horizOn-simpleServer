@@ -140,12 +140,12 @@ class AppleSignInController
             $userId = Database::uuid();
             $displayName = self::buildDisplayName($firstName, $lastName, $email, $appleUserId);
             $stmt = $pdo->prepare(
-                'INSERT INTO users (id, display_name, anonymous_token, email, apple_user_id, is_private_relay_email, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+                'INSERT INTO users (id, display_name, anonymous_token, email, apple_user_id, is_private_relay_email, created_at, created_at_millis) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
             );
             // `anonymous_token` is NOT NULL UNIQUE on the existing schema — generate a dummy
             // so Apple users satisfy the constraint without being reachable via the anonymous flow.
             $placeholderToken = 'apple:' . bin2hex(random_bytes(16));
-            $stmt->execute([$userId, $displayName, $placeholderToken, $email, $appleUserId, $isPrivateRelay, $now]);
+            $stmt->execute([$userId, $displayName, $placeholderToken, $email, $appleUserId, $isPrivateRelay, $now, Database::nowMillis()]);
 
             $user = [
                 'id' => $userId,

@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS users (
     frame_id TEXT,
     badges TEXT,
     unlocks TEXT,
+    created_at_millis INTEGER,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -214,3 +215,8 @@ CREATE TABLE IF NOT EXISTS player_values (
     user_id TEXT PRIMARY KEY, data TEXT NOT NULL,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
+
+-- Bounded inbox state; no broadcast fanout.
+CREATE TABLE IF NOT EXISTS inbox_catalog (id INTEGER PRIMARY KEY, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS inbox_state (user_id TEXT PRIMARY KEY, data TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE);

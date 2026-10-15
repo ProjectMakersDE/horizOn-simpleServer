@@ -44,6 +44,7 @@ require_once $baseDir . '/src/GiftCodes/GiftCodesController.php';
 require_once $baseDir . '/src/PlayerProfile/PlayerProfileController.php';
 require_once $baseDir . '/src/PlayerValues/PlayerValuesController.php';
 require_once $baseDir . '/src/Statistics/StatisticsController.php';
+require_once $baseDir . '/src/Inbox/InboxController.php';
 require_once $baseDir . '/src/UserFeedback/UserFeedbackController.php';
 require_once $baseDir . '/src/UserLogs/UserLogsController.php';
 require_once $baseDir . '/src/CrashReporting/CrashReportingController.php';
@@ -89,6 +90,12 @@ $realtimeUnsupported = function (Request $req) {
 $router->post($prefix . '/realtime/session', $realtimeUnsupported);
 $router->post($prefix . '/realtime/subscriptions', $realtimeUnsupported);
 $router->get($prefix . '/realtime/socket', $realtimeUnsupported);
+
+// --- Inbox: authenticated REST parity, no public operator/admin routes ---
+$router->get($prefix . '/inbox', [InboxController::class, 'get']);
+$router->post($prefix . '/inbox/read', [InboxController::class, 'read']);
+$router->post($prefix . '/inbox/claim', [InboxController::class, 'claim']);
+$router->post($prefix . '/inbox/remove', [InboxController::class, 'remove']);
 
 // --- User Management ---
 $router->post($prefix . '/user-management/signup', [UserManagementController::class, 'signup']);

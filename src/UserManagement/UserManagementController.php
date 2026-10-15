@@ -70,8 +70,8 @@ class UserManagementController
         $anonymousToken = bin2hex(random_bytes(16)); // 32 char hex token
         $now = Database::now();
 
-        $stmt = $pdo->prepare('INSERT INTO users (id, display_name, anonymous_token, created_at) VALUES (?, ?, ?, ?)');
-        $stmt->execute([$userId, $username, $anonymousToken, $now]);
+        $stmt = $pdo->prepare('INSERT INTO users (id, display_name, anonymous_token, created_at, created_at_millis) VALUES (?, ?, ?, ?, ?)');
+        $stmt->execute([$userId, $username, $anonymousToken, $now, Database::nowMillis()]);
 
         Response::created([
             'userId' => $userId,
