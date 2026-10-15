@@ -45,6 +45,7 @@ require_once $baseDir . '/src/PlayerProfile/PlayerProfileController.php';
 require_once $baseDir . '/src/PlayerValues/PlayerValuesController.php';
 require_once $baseDir . '/src/Statistics/StatisticsController.php';
 require_once $baseDir . '/src/Inbox/InboxController.php';
+require_once $baseDir . '/src/Achievements/AchievementController.php';
 require_once $baseDir . '/src/UserFeedback/UserFeedbackController.php';
 require_once $baseDir . '/src/UserLogs/UserLogsController.php';
 require_once $baseDir . '/src/CrashReporting/CrashReportingController.php';
@@ -143,6 +144,11 @@ $router->post($prefix . '/player-values/adjust', [PlayerValuesController::class,
 $router->get($prefix . '/statistics/definitions', [StatisticsController::class, 'definitions']);
 $router->get($prefix . '/statistics', [StatisticsController::class, 'get']);
 $router->post($prefix . '/statistics', [StatisticsController::class, 'update']);
+
+// --- Achievements: player-owned snapshots, explicit manual unlock and bounded Inbox handoff ---
+$router->get($prefix . '/achievements', [AchievementController::class, 'get']);
+$router->post($prefix . '/achievements/unlock', [AchievementController::class, 'unlock']);
+$router->post($prefix . '/achievements/rewards/deliver', [AchievementController::class, 'deliver']);
 
 // --- User Feedback ---
 $router->post($prefix . '/user-feedback/submit', [UserFeedbackController::class, 'submit']);

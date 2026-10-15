@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 require_once __DIR__ . '/StatisticsService.php';
+require_once __DIR__ . '/../Achievements/AchievementService.php';
 
 class StatisticsController
 {
@@ -16,6 +17,7 @@ class StatisticsController
     {
         try { Response::json($action(new StatisticsService(Database::connect()))); }
         catch (StatisticsFailure $failure) { Response::json(['error' => true, 'code' => $failure->errorCode, 'message' => $failure->getMessage()], $failure->status); }
+        catch (AchievementFailure $failure) { Response::json(['error' => true, 'code' => $failure->errorCode, 'message' => $failure->getMessage()], $failure->status); }
     }
     private static function user($value): string
     {
@@ -42,7 +44,7 @@ class StatisticsController
             $body = $request->body(); if (!is_array($body)) StatisticsRules::fail('INVALID_REQUEST', 'A JSON object is required');
             $user = self::user($body['userId'] ?? null); Auth::requirePlayerSession($request, $user);
             $operation = $body['operationId'] ?? null; StatisticsRules::operation($operation);
-            return $service->update($user, $operation, StatisticsRules::updates($body['updates'] ?? null));
+            return (new AchievementService(Database::connect()))->report($user, $operation, StatisticsRules::updates($body['updates'] ?? null));
         });
     }
 }

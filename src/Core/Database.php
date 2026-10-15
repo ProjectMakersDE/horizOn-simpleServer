@@ -57,6 +57,7 @@ class Database
         self::ensureStatisticsConfig($pdo);
         self::ensureInboxConfig($pdo);
         self::ensureGiftCodeValues($pdo);
+        self::ensureAchievementsConfig($pdo);
         // Millisecond registration cutoff prevents a post-publication signup in the same second qualifying.
         self::addColumnIfNotExists($pdo, $driver, 'users', 'created_at_millis', 'INTEGER', 'BIGINT NULL');
 
@@ -101,6 +102,14 @@ class Database
     }
 
     public static function nowMillis(): int { return (int)floor(microtime(true) * 1000); }
+
+    public static function ensureAchievementsConfig(PDO $pdo): void
+    {
+        if ($pdo->query('SELECT id FROM achievement_catalog WHERE id=1')->fetch() !== false) return;
+        $insert = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql' ? 'INSERT IGNORE' : 'INSERT OR IGNORE';
+        $catalog = ['projectId'=>self::uuid(),'revision'=>0,'definitions'=>[],'lifetimeKeys'=>[]];
+        $pdo->prepare($insert.' INTO achievement_catalog(id,data) VALUES(1,?)')->execute([json_encode($catalog,JSON_THROW_ON_ERROR)]);
+    }
 
     /** Additive legacy upgrade; inspect each affected table once, never reset counters/history. */
     public static function ensureGiftCodeValues(PDO $pdo): void

@@ -1,5 +1,7 @@
 -- horizOn Simple Server - SQLite Schema
 
+CREATE TABLE IF NOT EXISTS achievement_catalog (id INTEGER PRIMARY KEY, data TEXT NOT NULL);
+
 CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     display_name TEXT NOT NULL,
@@ -18,6 +20,11 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE INDEX IF NOT EXISTS idx_users_apple_user_id ON users(apple_user_id);
+
+CREATE TABLE IF NOT EXISTS achievement_state (
+    user_id TEXT PRIMARY KEY, revision INTEGER NOT NULL, data TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
 
 CREATE TABLE IF NOT EXISTS leaderboard (
     id TEXT PRIMARY KEY,

@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 require_once __DIR__ . '/StatisticsRules.php';
+require_once __DIR__ . '/../Core/SqlTransaction.php';
 
 /** One state row per player. Config/player/value writes share the caller's PDO transaction. */
 class StatisticsService
@@ -9,24 +10,23 @@ class StatisticsService
     private PDO $pdo;
     private bool $mysql;
     private $clock;
-    public function __construct(PDO $pdo, ?callable $clock = null)
+    private SqlTransaction $transactions;
+    public function __construct(PDO $pdo, ?callable $clock = null, ?SqlTransaction $transactions = null)
     {
         if (PHP_INT_SIZE < 8) throw new RuntimeException('Statistics requires 64-bit PHP integers');
         $this->pdo = $pdo; $this->mysql = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql';
         $this->clock = $clock ?? static function () { return (int)floor(microtime(true) * 1000); };
+        $this->transactions = $transactions ?? new SqlTransaction($pdo);
+        if (!$this->transactions->owns($pdo)) throw new InvalidArgumentException('Transaction scope belongs to another connection');
         if (!$this->mysql) $pdo->exec('PRAGMA busy_timeout=5000');
     }
     private function transaction(callable $work)
     {
-        $owner = !$this->pdo->inTransaction(); $began = false;
-        try {
-            if ($owner) { if ($this->mysql) $this->pdo->beginTransaction(); else $this->pdo->exec('BEGIN IMMEDIATE'); $began = true; }
-            $result = $work();
-            if ($owner) { if ($this->mysql) $this->pdo->commit(); else $this->pdo->exec('COMMIT'); }
-            return $result;
-        } catch (Throwable $error) {
-            if ($owner && $began) { try { if ($this->mysql) { if ($this->pdo->inTransaction()) $this->pdo->rollBack(); } else $this->pdo->exec('ROLLBACK'); } catch (Throwable $ignored) {} }
-            if ($error instanceof PDOException && in_array((int)($error->errorInfo[1] ?? 0), [5, 6, 1205, 1213], true)) StatisticsRules::fail('STATE_CONFLICT', 'Concurrent write; retry the original operationId', 409);
+        try { return $this->transactions->run($work); }
+        catch (SqlTransactionUncertain $error) { StatisticsRules::fail('STATE_CONFLICT', 'Commit uncertain; retry the original operationId', 409); }
+        catch (SqlTransactionRollbackOnly $error) { StatisticsRules::fail('STATE_CONFLICT', 'Nested operation failed; retry the original operationId', 409); }
+        catch (PDOException $error) {
+            if (in_array((int)($error->errorInfo[1] ?? 0), [5,6,1205,1213,2006,2013], true)) StatisticsRules::fail('STATE_CONFLICT', 'Concurrent write; retry the original operationId', 409);
             throw $error;
         }
     }

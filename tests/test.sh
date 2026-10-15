@@ -999,6 +999,38 @@ ST_ADMIN=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$TEST_PORT/a
 assert_status 'statistics operator configuration is never an app admin route' 404 "$ST_ADMIN"
 if php tests/statistics.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
+# ---- Achievements: hidden metadata, manual guard and atomic statistic integration ----
+php bin/achievements.php configure 0 <<'JSON' >/dev/null
+{"definitions":[{"key":"first-report","name":"First report","mode":"statistic","condition":{"statisticKey":"kills","threshold":1}},{"key":"manual-secret","name":"Secret","mode":"manual","hidden":true}]}
+JSON
+ACH_MISSING=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/achievements?userId=$USER_ID" -H "X-API-Key: $API_KEY")
+assert_status 'achievements require player Bearer' 401 "$ACH_MISSING"
+ACH_FOREIGN=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/achievements?userId=00000000-0000-0000-0000-000000000001" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN")
+assert_status 'achievements forbid foreign player' 403 "$ACH_FOREIGN"
+ACH_LOCKED=$(curl -s "$BASE_URL/achievements?userId=$USER_ID" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN")
+if [[ "$ACH_LOCKED" != *manual-secret* ]]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); echo 'FAIL: hidden locked metadata exposed'; fi
+ACH_OP=$(php -r 'require "src/Core/Database.php";echo Database::nowMillis(),":",Database::uuid();')
+ACH_REPORT_BODY="{\"userId\":\"$USER_ID\",\"operationId\":\"$ACH_OP\",\"updates\":[{\"key\":\"kills\",\"value\":0}]}"
+ACH_REPORT=$(curl -s "$BASE_URL/statistics" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$ACH_REPORT_BODY")
+assert_contains 'statistics report includes same-transaction achievement' '"newlyUnlocked":["first-report"]' "$ACH_REPORT"
+ACH_REPLAY=$(curl -s "$BASE_URL/statistics" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$ACH_REPORT_BODY")
+assert_contains 'statistics replay never repeats unlock notification' '"newlyUnlocked":[]' "$ACH_REPLAY"
+ACH_BODY="{\"userId\":\"$USER_ID\",\"key\":\"manual-secret\"}"
+ACH_UNLOCK=$(curl -s "$BASE_URL/achievements/unlock" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$ACH_BODY")
+assert_contains 'manual unlock reveals hidden metadata' '"name":"Secret"' "$ACH_UNLOCK"
+assert_contains 'manual unlock reports first accepted key' '"newlyUnlocked":["manual-secret"]' "$ACH_UNLOCK"
+ACH_REPEAT=$(curl -s "$BASE_URL/achievements/unlock" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$ACH_BODY")
+assert_contains 'manual unlock repeats safely' '"replayed":true' "$ACH_REPEAT"
+ACH_VERSION=$(php -r 'echo json_decode($argv[1],true)["achievements"]["definitionVersion"];' "$ACH_REPEAT")
+ACH_SAME=$(curl -s "$BASE_URL/achievements?userId=$USER_ID&definitionVersion=$ACH_VERSION" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN")
+assert_contains 'achievement player-visible metadata version can match' '"definitions":null' "$ACH_SAME"
+ACH_DRAIN=$(curl -s "$BASE_URL/achievements/rewards/deliver" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "{\"userId\":\"$USER_ID\",\"keys\":[\"manual-secret\"]}")
+assert_contains 'explicit bounded delivery result for no-reward guard' '"state":"none"' "$ACH_DRAIN"
+ACH_ADMIN=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$TEST_PORT/api/v1/admin/achievements/definitions" -H "X-API-Key: $API_KEY")
+assert_status 'achievement operator configuration not exposed as app admin' 404 "$ACH_ADMIN"
+if php tests/achievements.php; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); fi
+if php tests/achievements-migration.php; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); fi
+
 # ---- Inbox REST parity ----
 INB_NO_SESSION=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/inbox?userId=$USER_ID" -H "X-API-Key: $API_KEY")
 assert_status 'inbox requires player Bearer' 401 "$INB_NO_SESSION"
@@ -1065,6 +1097,11 @@ GC_CLI_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TEST_
 assert_status 'gift values operator rejects direct HTTP before bootstrap' 403 "$GC_CLI_STATUS"
 GC_CLI_BODY=$(curl -s "http://localhost:${TEST_PORT}/bin/gift-codes.php")
 if [ -z "$GC_CLI_BODY" ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); echo 'FAIL: gift values operator exposed data'; fi
+
+ACH_CLI_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TEST_PORT}/bin/achievements.php")
+assert_status 'achievements operator rejects direct HTTP before bootstrap' 403 "$ACH_CLI_STATUS"
+ACH_CLI_BODY=$(curl -s "http://localhost:${TEST_PORT}/bin/achievements.php")
+if [ -z "$ACH_CLI_BODY" ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); echo 'FAIL: achievements operator exposed data'; fi
 
 # ---- Summary ----
 echo ""
