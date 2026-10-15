@@ -639,3 +639,62 @@ The Simple Server implements the same API as the managed service, so you can sta
 ## License
 
 This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+
+## Player Values (TASK-1004)
+
+Server-owned integer balances and atomic catalogue purchases use the hosted SDK contract:
+
+- `GET /api/v1/app/player-values?userId=UUID`
+- `GET /api/v1/app/player-values/offers?userId=UUID`
+- `POST /api/v1/app/player-values/purchase` with `userId`, `offerKey`, `operationId`
+- `POST /api/v1/app/player-values/adjust` with `userId`, `key`, `amount`, `reason`, `operationId`
+
+All four require the project `X-API-Key` and that player's active Bearer session. Amounts
+are exact JSON integers within ±9,007,199,254,740,991. Direct adjustments default to disabled.
+The server checks balance ceilings, daily earning/adjustment caps and offer purchase caps.
+An offer checks and debits all costs before crediting any reward, within one SQL transaction.
+Failures retain all values and include the current state where available.
+
+Create one operation ID as `unixMillis:UUID` for an action and retain it for retries. A retained
+receipt returns `operation.replayed=true`. Reusing its ID for another payload returns
+`OPERATION_CONFLICT`. Old IDs outside the safe replay window return `OPERATION_EXPIRED` and
+must not be silently replaced with a new ID. Read `operationWindow.serverTime` and
+`oldestAcceptedAt` to account for client clock skew. The last 50 receipts are retained for up to
+30 days. Their eviction advances a permanent timestamp floor so forgotten operations never
+credit again. Reads never reveal another player's balances.
+
+Administration is local to the installation. The public app API key provides no operator route:
+
+```sh
+php bin/player-values.php config
+php bin/player-values.php configure 0 < player-values.json
+php bin/player-values.php player PLAYER_UUID
+php bin/player-values.php correct PLAYER_UUID < correction.json
+```
+
+`configure` requires the current revision (zero only before the initial configuration).
+A configuration has `definitions` and `offers`, matching the hosted Dashboard JSON. Example:
+
+```json
+{"definitions":[{"key":"gold","name":"Gold","initialBalance":100,"maxBalance":10000},{"key":"gem","name":"Gem","maxBalance":1000}],"offers":[{"key":"gems","name":"Buy gems","costs":[{"key":"gold","amount":30}],"rewards":[{"key":"gem","amount":2}]}]}
+```
+
+A correction has `values: [{"key":"gold","balance":250}]`, a mandatory `note` and a stable
+`operationId`. It records the operator source, note and original applied delta. Removed
+values retain their balances and initialization markers. Restoring a definition never repeats
+its initial balance. Limits are 64 definitions, 1000 offers, 256 distinct lifetime value keys,
+1000 distinct purchased offer keys per UTC day, 1 MiB of configuration and 50 player receipts.
+The operator can inspect preserved values before editing storage directly.
+
+Storage adds one bounded player row and separate configuration/offer tables. A normal write
+reads the small definition set, one player row and optionally one offer, then writes the player
+row. SQLite uses `BEGIN IMMEDIATE`; MySQL locks the target user row even before its first
+balance exists. An internal `PlayerValuesService::grant` reuses an outer transaction for a
+future inbox/gift-code operation. Its caller must propagate failures and roll back that entire
+transaction. Do not catch a failed grant and commit its surrounding business operation.
+
+Run `bash tests/test.sh` for HTTP, authentication, integer validation and SQLite races. The
+storage fixture also accepts `HORIZON_VALUES_TEST_DSN`, `HORIZON_VALUES_TEST_USER` and
+`HORIZON_VALUES_TEST_PASSWORD` for an isolated MySQL database named `task1004_<hex>`.
+Never point it at application data. SQLite and actual MySQL 8.4 both pass the rollback,
+replay, receipt eviction and independent-process concurrent-purchase fixture.

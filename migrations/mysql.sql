@@ -190,3 +190,16 @@ CREATE TABLE IF NOT EXISTS email_queue (
     FOREIGN KEY (template_id) REFERENCES email_templates(id),
     FOREIGN KEY (user_id) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- TASK-1004: bounded server-owned balances and a separate offer catalogue.
+CREATE TABLE IF NOT EXISTS player_values_config (
+    id TINYINT PRIMARY KEY, revision BIGINT NOT NULL,
+    definitions MEDIUMTEXT NOT NULL, known_keys TEXT NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS player_value_offers (
+    offer_key VARCHAR(24) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY, data TEXT NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS player_values (
+    user_id CHAR(36) PRIMARY KEY, data MEDIUMTEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

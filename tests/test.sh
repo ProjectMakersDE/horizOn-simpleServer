@@ -913,6 +913,35 @@ else
     FAIL=$((FAIL + 1))
 fi
 
+# ---- Player Values: SDK HTTP contract and isolated storage races ----
+php bin/player-values.php configure 0 <<'JSON' >/dev/null
+{"definitions":[{"key":"gold","name":"Gold","initialBalance":100,"maxBalance":1000,"adjustment":{"enabled":true,"maxPerCall":10,"dailyLimit":20}},{"key":"gem","name":"Gem","maxBalance":100}],"offers":[{"key":"gems","name":"Gems","costs":[{"key":"gold","amount":30}],"rewards":[{"key":"gem","amount":2}]}]}
+JSON
+PV_MISSING=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/player-values?userId=$USER_ID" -H "X-API-Key: $API_KEY")
+assert_status 'player values require session' 401 "$PV_MISSING"
+PV_FOREIGN=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/player-values?userId=00000000-0000-0000-0000-000000000001" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN")
+assert_status 'player values reject foreign session' 403 "$PV_FOREIGN"
+PV_STATE=$(curl -s "$BASE_URL/player-values?userId=$USER_ID" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN")
+assert_contains 'player values initial balance' '"balance":100' "$PV_STATE"
+PV_OFFERS=$(curl -s "$BASE_URL/player-values/offers?userId=$USER_ID" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN")
+assert_contains 'offer catalogue contract' '"costs":[{"key":"gold","amount":30}]' "$PV_OFFERS"
+PV_OP=$(php -r 'require "src/Core/Database.php"; echo (int)floor(microtime(true)*1000), ":", Database::uuid();')
+PV_BODY="{\"userId\":\"$USER_ID\",\"offerKey\":\"gems\",\"operationId\":\"$PV_OP\"}"
+PV_BUY=$(curl -s "$BASE_URL/player-values/purchase" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$PV_BODY")
+assert_contains 'purchase debit' '"balance":70' "$PV_BUY"
+assert_contains 'purchase applied once' '"replayed":false' "$PV_BUY"
+PV_REPLAY=$(curl -s "$BASE_URL/player-values/purchase" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$PV_BODY")
+assert_contains 'purchase replay' '"replayed":true' "$PV_REPLAY"
+assert_contains 'purchase replay retains balance' '"balance":70' "$PV_REPLAY"
+for PV_BAD_AMOUNT in '1.5' '"1"' 'null' '9007199254740992'; do
+    PV_BAD=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/player-values/adjust" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "{\"userId\":\"$USER_ID\",\"key\":\"gold\",\"amount\":$PV_BAD_AMOUNT,\"reason\":\"test\",\"operationId\":\"$PV_OP\"}")
+    assert_status "unsafe adjustment number $PV_BAD_AMOUNT" 400 "$PV_BAD"
+done
+PV_ADMIN=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$TEST_PORT/api/v1/admin/player-values/config" -H "X-API-Key: $API_KEY")
+assert_status 'public app key never exposes operator configuration' 404 "$PV_ADMIN"
+if php tests/player-values.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/player-values-bootstrap.php "$TEST_PORT"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
 # ---- Summary ----
 echo ""
 echo "================================"

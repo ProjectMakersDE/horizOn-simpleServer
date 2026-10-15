@@ -194,3 +194,14 @@ CREATE TABLE IF NOT EXISTS email_queue (
 
 CREATE INDEX IF NOT EXISTS idx_email_queue_status_scheduled ON email_queue(status, scheduled_at);
 CREATE INDEX IF NOT EXISTS idx_email_queue_user_status ON email_queue(user_id, status);
+
+-- TASK-1004: bounded server-owned balances and a separate offer catalogue.
+CREATE TABLE IF NOT EXISTS player_values_config (
+    id INTEGER PRIMARY KEY CHECK (id = 1), revision INTEGER NOT NULL,
+    definitions TEXT NOT NULL, known_keys TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS player_value_offers (offer_key TEXT COLLATE BINARY PRIMARY KEY, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS player_values (
+    user_id TEXT PRIMARY KEY, data TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);

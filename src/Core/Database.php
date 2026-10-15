@@ -53,6 +53,7 @@ class Database
 
         $sql = file_get_contents($file);
         $pdo->exec($sql);
+        self::ensurePlayerValuesConfig($pdo);
 
         // Add email column to users table if it doesn't exist (for Email Sending)
         self::addColumnIfNotExists($pdo, $driver, 'users', 'email', 'TEXT', 'VARCHAR(254)');
@@ -68,6 +69,14 @@ class Database
         self::addColumnIfNotExists($pdo, $driver, 'users', 'frame_id', 'TEXT', 'VARCHAR(32) NULL');
         self::addColumnIfNotExists($pdo, $driver, 'users', 'badges', 'TEXT', 'TEXT NULL');
         self::addColumnIfNotExists($pdo, $driver, 'users', 'unlocks', 'TEXT', 'TEXT NULL');
+    }
+
+    /** Existing installations must not take a SQLite writer lock on every HTTP request. */
+    public static function ensurePlayerValuesConfig(PDO $pdo): void
+    {
+        if ($pdo->query('SELECT id FROM player_values_config WHERE id = 1')->fetch() !== false) return;
+        $insert = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql' ? 'INSERT IGNORE' : 'INSERT OR IGNORE';
+        $pdo->exec($insert . " INTO player_values_config(id, revision, definitions, known_keys) VALUES (1, 0, '[]', '[]')");
     }
 
     private static function createIndexIfNotExists(PDO $pdo, string $driver, string $indexName, string $table, string $column): void
