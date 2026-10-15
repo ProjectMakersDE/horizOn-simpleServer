@@ -1,5 +1,8 @@
 -- horizOn Simple Server - MySQL Schema
 
+CREATE TABLE IF NOT EXISTS achievement_catalog (id INT PRIMARY KEY, data MEDIUMTEXT NOT NULL)
+    ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS users (
     id CHAR(36) PRIMARY KEY,
     display_name VARCHAR(30) NOT NULL,
@@ -16,6 +19,11 @@ CREATE TABLE IF NOT EXISTS users (
     created_at_millis BIGINT NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_users_apple_user_id (apple_user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS achievement_state (
+    user_id CHAR(36) PRIMARY KEY, revision BIGINT NOT NULL, data MEDIUMTEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS leaderboard (
