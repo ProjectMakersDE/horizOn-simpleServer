@@ -54,6 +54,7 @@ class Database
         $sql = file_get_contents($file);
         $pdo->exec($sql);
         self::ensurePlayerValuesConfig($pdo);
+        self::ensureStatisticsConfig($pdo);
 
         // Add email column to users table if it doesn't exist (for Email Sending)
         self::addColumnIfNotExists($pdo, $driver, 'users', 'email', 'TEXT', 'VARCHAR(254)');
@@ -77,6 +78,14 @@ class Database
         if ($pdo->query('SELECT id FROM player_values_config WHERE id = 1')->fetch() !== false) return;
         $insert = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql' ? 'INSERT IGNORE' : 'INSERT OR IGNORE';
         $pdo->exec($insert . " INTO player_values_config(id, revision, definitions, known_keys) VALUES (1, 0, '[]', '[]')");
+    }
+
+    /** Read-only bootstrap when the singleton catalog already exists. */
+    public static function ensureStatisticsConfig(PDO $pdo): void
+    {
+        if ($pdo->query('SELECT id FROM statistics_catalog WHERE id = 1')->fetch() !== false) return;
+        $insert = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql' ? 'INSERT IGNORE' : 'INSERT OR IGNORE';
+        $pdo->exec($insert . " INTO statistics_catalog(id, version, definitions) VALUES (1, 0, '[]')");
     }
 
     private static function createIndexIfNotExists(PDO $pdo, string $driver, string $indexName, string $table, string $column): void

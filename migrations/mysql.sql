@@ -203,3 +203,12 @@ CREATE TABLE IF NOT EXISTS player_values (
     user_id CHAR(36) PRIMARY KEY, data MEDIUMTEXT NOT NULL,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- TASK-1005: one bounded catalog and one statistics document per player.
+CREATE TABLE IF NOT EXISTS statistics_catalog (
+    id TINYINT PRIMARY KEY, version BIGINT NOT NULL, definitions MEDIUMTEXT NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS statistics_state (
+    user_id CHAR(36) PRIMARY KEY, data MEDIUMTEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

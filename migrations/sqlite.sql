@@ -195,6 +195,15 @@ CREATE TABLE IF NOT EXISTS email_queue (
 CREATE INDEX IF NOT EXISTS idx_email_queue_status_scheduled ON email_queue(status, scheduled_at);
 CREATE INDEX IF NOT EXISTS idx_email_queue_user_status ON email_queue(user_id, status);
 
+-- TASK-1005: one bounded catalog and one statistics document per player.
+CREATE TABLE IF NOT EXISTS statistics_catalog (
+    id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL, definitions TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS statistics_state (
+    user_id TEXT PRIMARY KEY, data TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
 -- TASK-1004: bounded server-owned balances and a separate offer catalogue.
 CREATE TABLE IF NOT EXISTS player_values_config (
     id INTEGER PRIMARY KEY CHECK (id = 1), revision INTEGER NOT NULL,
