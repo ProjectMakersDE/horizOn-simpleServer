@@ -56,6 +56,7 @@ class Database
         self::ensurePlayerValuesConfig($pdo);
         self::ensureStatisticsConfig($pdo);
         self::ensureInboxConfig($pdo);
+        self::ensureGiftCodeValues($pdo);
         // Millisecond registration cutoff prevents a post-publication signup in the same second qualifying.
         self::addColumnIfNotExists($pdo, $driver, 'users', 'created_at_millis', 'INTEGER', 'BIGINT NULL');
 
@@ -101,11 +102,32 @@ class Database
 
     public static function nowMillis(): int { return (int)floor(microtime(true) * 1000); }
 
-    private static function createIndexIfNotExists(PDO $pdo, string $driver, string $indexName, string $table, string $column): void
+    /** Additive legacy upgrade; inspect each affected table once, never reset counters/history. */
+    public static function ensureGiftCodeValues(PDO $pdo): void
+    {
+        $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        $definitions = [
+            'gift_codes' => ['values_json' => 'TEXT'],
+            'gift_code_redemptions' => ['idempotency_id' => $driver === 'mysql'
+                ? 'VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL' : 'TEXT',
+                'gift_data' => 'TEXT', 'granted_values' => 'TEXT', 'value_granted_at' => $driver === 'mysql' ? 'BIGINT NULL' : 'INTEGER'],
+        ];
+        foreach ($definitions as $table => $columns) {
+            if ($driver === 'mysql') {
+                $query = $pdo->prepare('SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?');
+                $query->execute([$table]); $existing = $query->fetchAll(PDO::FETCH_COLUMN);
+            } else $existing = array_column($pdo->query('PRAGMA table_info(' . $table . ')')->fetchAll(), 'name');
+            foreach ($columns as $column => $type) if (!in_array($column, $existing, true)) $pdo->exec('ALTER TABLE ' . $table . ' ADD COLUMN ' . $column . ' ' . $type);
+        }
+        self::createIndexIfNotExists($pdo, $driver, 'idx_gift_idempotency', 'gift_code_redemptions', 'idempotency_id', true, true);
+        self::createIndexIfNotExists($pdo, $driver, 'idx_gift_retention', 'gift_code_redemptions', 'value_granted_at, redeemed_at', false, true);
+    }
+
+    private static function createIndexIfNotExists(PDO $pdo, string $driver, string $indexName, string $table, string $column, bool $unique = false, bool $required = false): void
     {
         try {
             if ($driver === 'sqlite') {
-                $sql = "CREATE INDEX IF NOT EXISTS {$indexName} ON {$table}({$column})";
+                $sql = 'CREATE ' . ($unique ? 'UNIQUE ' : '') . "INDEX IF NOT EXISTS {$indexName} ON {$table}({$column})";
                 $pdo->exec($sql);
             } else {
                 $stmt = $pdo->prepare(
@@ -114,11 +136,12 @@ class Database
                 );
                 $stmt->execute([$table, $indexName]);
                 if ((int)$stmt->fetch()['cnt'] === 0) {
-                    $sql = "CREATE INDEX {$indexName} ON {$table}({$column})";
+                    $sql = 'CREATE ' . ($unique ? 'UNIQUE ' : '') . "INDEX {$indexName} ON {$table}({$column})";
                     $pdo->exec($sql);
                 }
             }
         } catch (\Throwable $e) {
+            if ($required) throw $e;
             error_log('horizOn migration notice (index): ' . $e->getMessage());
         }
     }

@@ -941,6 +941,23 @@ PV_ADMIN=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$TEST_PORT/a
 assert_status 'public app key never exposes operator configuration' 404 "$PV_ADMIN"
 if php tests/player-values.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 if php tests/player-values-bootstrap.php "$TEST_PORT"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
+# Gift-code value rewards use the same authenticated state and immutable original redemption ID.
+php -r 'require "src/Core/Config.php";require "src/Core/Database.php";Config::load(".env");$p=Database::connect();$p->prepare("INSERT INTO gift_codes(id,code,reward_data,max_redemptions) VALUES(?,?,?,?)")->execute([Database::uuid(),"VALUES-HTTP","opaque-gift",10]);'
+php bin/gift-codes.php set-values VALUES-HTTP <<'JSON' >/dev/null
+{"values":[{"key":"gold","amount":5}]}
+JSON
+GC_BODY="{\"userId\":\"$USER_ID\",\"code\":\"VALUES-HTTP\",\"idempotencyId\":\"http-original-gift\"}"
+GC_FIRST=$(curl -s "$BASE_URL/gift-codes/redeem" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$GC_BODY")
+assert_contains 'gift reward response includes actual values' '"grantedValues":[{"key":"gold","amount":5}]' "$GC_FIRST"
+assert_contains 'gift reward includes current player values' '"balance":75' "$GC_FIRST"
+assert_contains 'first gift reward not replayed' '"replayed":false' "$GC_FIRST"
+GC_REPLAY=$(curl -s "$BASE_URL/gift-codes/redeem" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$GC_BODY")
+assert_contains 'gift original ID safely replays' '"replayed":true' "$GC_REPLAY"
+assert_contains 'gift original ID never regrants' '"balance":75' "$GC_REPLAY"
+GC_INVALID=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/gift-codes/redeem" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "{\"userId\":\"$USER_ID\",\"code\":\"VALUES-HTTP\",\"idempotencyId\":1}")
+assert_status 'gift idempotency ID rejects coercion' 400 "$GC_INVALID"
+if php tests/gift-code-values.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 # The SDK preflight must distinguish an unsupported gateway from a transient transport error.
 REALTIME_RESP=$(curl -s -w "\n%{http_code}" "$BASE_URL/realtime/session" \
     -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" -d '{}')
@@ -1043,6 +1060,11 @@ INB_CLI_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TEST
 assert_status 'inbox operator rejects direct HTTP before bootstrap' 403 "$INB_CLI_STATUS"
 INB_CLI_BODY=$(curl -s "http://localhost:${TEST_PORT}/bin/inbox.php")
 if [ -z "$INB_CLI_BODY" ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); echo 'FAIL: inbox operator exposed data'; fi
+
+GC_CLI_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TEST_PORT}/bin/gift-codes.php")
+assert_status 'gift values operator rejects direct HTTP before bootstrap' 403 "$GC_CLI_STATUS"
+GC_CLI_BODY=$(curl -s "http://localhost:${TEST_PORT}/bin/gift-codes.php")
+if [ -z "$GC_CLI_BODY" ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); echo 'FAIL: gift values operator exposed data'; fi
 
 # ---- Summary ----
 echo ""

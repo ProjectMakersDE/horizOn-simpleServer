@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS gift_codes (
     code TEXT UNIQUE NOT NULL,
     reward_type TEXT NOT NULL DEFAULT '',
     reward_data TEXT,
+    values_json TEXT,
     max_redemptions INTEGER NOT NULL DEFAULT 1,
     current_redemptions INTEGER NOT NULL DEFAULT 0,
     expires_at TEXT,
@@ -71,6 +72,10 @@ CREATE TABLE IF NOT EXISTS gift_code_redemptions (
     gift_code_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
     redeemed_at TEXT NOT NULL DEFAULT (datetime('now')),
+    idempotency_id TEXT,
+    gift_data TEXT,
+    granted_values TEXT,
+    value_granted_at INTEGER,
     FOREIGN KEY (gift_code_id) REFERENCES gift_codes(id),
     FOREIGN KEY (user_id) REFERENCES users(id),
     UNIQUE(gift_code_id, user_id)

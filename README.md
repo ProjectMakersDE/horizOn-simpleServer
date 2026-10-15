@@ -216,6 +216,21 @@ Language values are normalized like the managed backend: for example `DE-de` bec
 
 `/gift-codes/redeem` is bound to the player's session: send `Authorization: Bearer <accessToken>` from sign-in. An invalid or expired session returns `401` (`SESSION_REQUIRED`), a session of another user `403` (`SESSION_FORBIDDEN`). A request without a session is rejected with `401` (`SESSION_REQUIRED`) as well; there is no transition window, so SDK versions that do not send the session (Unity 1.8.6, Godot 1.7.3 and MCP 1.5.5) cannot redeem.
 
+Gift codes can additionally grant up to eight positive, unique Player Values rewards. The local operator sets them using the same configured keys and balance limits:
+
+```sh
+php bin/gift-codes.php values CODE
+php bin/gift-codes.php set-values CODE <<'JSON'
+{"values":[{"key":"gold","amount":5}]}
+JSON
+```
+
+Omitting `values` preserves the current rewards; `[]` clears them and `null` is rejected. Amounts must be JSON integers from1 to9007199254740991 and fit the configured `maxBalance`. The operator command updates only `values_json`, preserving concurrent redemption counters. The script rejects HTTP before configuration or database bootstrap. Existing SQL-created codes with `values_json IS NULL` retain their opaque `reward_data` and cosmetic-grant behavior and perform no Player Values reads.
+
+Add a stable `idempotencyId` of1..128 characters to the normal `{userId,code}` redemption body and retain it across a timeout. Older clients may omit it. A successful response additionally contains `grantedValues`, the current `playerValues` snapshot (or null for legacy codes), and `replayed`. A retained replay uses the original granted amounts and gift data, together with the current balance. Reusing an ID for a different code/player returns409 `OPERATION_CONFLICT`; an uncertain commit returns409 `STATE_CONFLICT` and requires retrying the same ID. The counter, permanent source receipt, values and cosmetic unlocks share one explicit SQL transaction; any later failure rolls them all back.
+
+Value-bearing redemption receipts are permanent guards: never delete rows where `value_granted_at IS NOT NULL`, even after the bounded Player Values receipt has been evicted. If operating a90-day cleanup for ordinary history, its predicate must include `value_granted_at IS NULL`. Additive startup migration preserves old counters/history and provisions the unique case-sensitive idempotency index and guard-retention index. The existing one-redemption-per-code/player self-hosted rule remains unchanged. Run `php tests/gift-code-values.php` for real SQLite migration, rollback, replay and concurrent-process checks; the same suite supports an explicitly named temporary MySQL test database through its guarded `HORIZON_GIFT_TEST_DSN` fixture variables.
+
 ### User Feedback
 
 | Method | Endpoint | Description |
