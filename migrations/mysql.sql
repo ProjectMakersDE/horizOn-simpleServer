@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS users (
     badges TEXT NULL,
     unlocks TEXT NULL,
     created_at_millis BIGINT NULL,
+    last_login_millis BIGINT NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_users_apple_user_id (apple_user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -231,3 +232,17 @@ CREATE TABLE IF NOT EXISTS statistics_state (
 CREATE TABLE IF NOT EXISTS inbox_catalog (id INT PRIMARY KEY, data MEDIUMTEXT NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS inbox_state (user_id CHAR(36) PRIMARY KEY, data MEDIUMTEXT NOT NULL,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Nullable active pointers and reverse references retain bounded/resumable deletion anchors.
+CREATE TABLE IF NOT EXISTS friends_state (
+    user_id CHAR(36) PRIMARY KEY, active_user_id CHAR(36) NULL, revision BIGINT NOT NULL,
+    friends TEXT NOT NULL, incoming TEXT NOT NULL, outgoing TEXT NOT NULL, blocked TEXT NOT NULL,
+    INDEX idx_friends_deleted(active_user_id,user_id),
+    FOREIGN KEY(active_user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS friends_references (
+    owner_user_id CHAR(36) NOT NULL, related_user_id CHAR(36) NOT NULL,
+    PRIMARY KEY(owner_user_id,related_user_id),
+    INDEX idx_friends_related(related_user_id,owner_user_id),
+    FOREIGN KEY(owner_user_id) REFERENCES friends_state(user_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

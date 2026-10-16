@@ -1071,6 +1071,11 @@ assert_status 'inbox operator routes are not public app administration' 404 "$IN
 if php tests/inbox.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 if php tests/inbox-migration.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
+# ---- Friends: real authenticated REST and independent SQL concurrency/rollback regressions ----
+if php tests/friends-http.php "$BASE_URL" "$API_KEY" "$USER_ID" "$SESSION_TOKEN"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/friends.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/friends-migration.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
 # Exercise direct existing-file dispatch, which Apache/CGI can bypass the index router for.
 # Reuse the suite's owned listener after its API checks instead of touching another port/process.
 kill "$PHP_PID"
@@ -1102,6 +1107,11 @@ ACH_CLI_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TEST
 assert_status 'achievements operator rejects direct HTTP before bootstrap' 403 "$ACH_CLI_STATUS"
 ACH_CLI_BODY=$(curl -s "http://localhost:${TEST_PORT}/bin/achievements.php")
 if [ -z "$ACH_CLI_BODY" ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); echo 'FAIL: achievements operator exposed data'; fi
+
+FR_CLI_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TEST_PORT}/bin/friends.php")
+assert_status 'Friends operator rejects direct HTTP before bootstrap' 403 "$FR_CLI_STATUS"
+FR_CLI_BODY=$(curl -s "http://localhost:${TEST_PORT}/bin/friends.php")
+if [ -z "$FR_CLI_BODY" ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); echo 'FAIL: Friends operator exposed data'; fi
 
 # ---- Summary ----
 echo ""

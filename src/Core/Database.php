@@ -59,7 +59,7 @@ class Database
         self::ensureGiftCodeValues($pdo);
         self::ensureAchievementsConfig($pdo);
         // Millisecond registration cutoff prevents a post-publication signup in the same second qualifying.
-        self::addColumnIfNotExists($pdo, $driver, 'users', 'created_at_millis', 'INTEGER', 'BIGINT NULL');
+        self::ensureUserActivityColumns($pdo);
 
         // Add email column to users table if it doesn't exist (for Email Sending)
         self::addColumnIfNotExists($pdo, $driver, 'users', 'email', 'TEXT', 'VARCHAR(254)');
@@ -99,6 +99,17 @@ class Database
         $insert = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql' ? 'INSERT IGNORE' : 'INSERT OR IGNORE';
         $state = ['apiKeyId' => self::uuid(), 'revision' => 0, 'entries' => [], 'receipts' => [], 'evictedThroughMillis' => 0];
         $pdo->prepare($insert . ' INTO inbox_catalog(id,data) VALUES (1,?)')->execute([json_encode($state, JSON_THROW_ON_ERROR)]);
+    }
+
+    /** One existing bootstrap metadata query checks both timestamps; no extra login read. */
+    public static function ensureUserActivityColumns(PDO $pdo): void
+    {
+        $mysql = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql';
+        $columns = $mysql
+            ? $pdo->query("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='users'")->fetchAll(PDO::FETCH_COLUMN)
+            : array_column($pdo->query('PRAGMA table_info(users)')->fetchAll(), 'name');
+        foreach (['created_at_millis', 'last_login_millis'] as $column) if (!in_array($column, $columns, true))
+            $pdo->exec('ALTER TABLE users ADD COLUMN ' . $column . ($mysql ? ' BIGINT NULL' : ' INTEGER'));
     }
 
     public static function nowMillis(): int { return (int)floor(microtime(true) * 1000); }

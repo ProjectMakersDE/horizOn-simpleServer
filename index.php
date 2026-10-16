@@ -46,6 +46,7 @@ require_once $baseDir . '/src/PlayerValues/PlayerValuesController.php';
 require_once $baseDir . '/src/Statistics/StatisticsController.php';
 require_once $baseDir . '/src/Inbox/InboxController.php';
 require_once $baseDir . '/src/Achievements/AchievementController.php';
+require_once $baseDir . '/src/Friends/FriendsController.php';
 require_once $baseDir . '/src/UserFeedback/UserFeedbackController.php';
 require_once $baseDir . '/src/UserLogs/UserLogsController.php';
 require_once $baseDir . '/src/CrashReporting/CrashReportingController.php';
@@ -97,6 +98,13 @@ $router->get($prefix . '/inbox', [InboxController::class, 'get']);
 $router->post($prefix . '/inbox/read', [InboxController::class, 'read']);
 $router->post($prefix . '/inbox/claim', [InboxController::class, 'claim']);
 $router->post($prefix . '/inbox/remove', [InboxController::class, 'remove']);
+
+// --- Friends: explicit player revisions, one atomic bilateral relationship/Inbox scope ---
+$router->get($prefix . '/friends', [FriendsController::class, 'get']);
+$router->get($prefix . '/friends/find', [FriendsController::class, 'find']);
+foreach (FriendsRules::ACTIONS as $friendsAction) {
+    $router->post($prefix . '/friends/' . $friendsAction, static function (Request $req) use ($friendsAction) { FriendsController::change($req, $friendsAction); });
+}
 
 // --- User Management ---
 $router->post($prefix . '/user-management/signup', [UserManagementController::class, 'signup']);
