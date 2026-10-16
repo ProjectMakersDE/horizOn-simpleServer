@@ -65,7 +65,8 @@ foreach ($operators as [$method, $suffix]) {
         check(['error', 'message', 'code'], array_keys($result), 'Only constant refusal, no private state');
     }
 }
-$pipes = []; $process = proc_open([PHP_BINARY, '-n', __DIR__ . '/../bin/chat.php', 'send'], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, sys_get_temp_dir());
+// Disable the database classes specifically; -n can also remove mandatory JSON on modular PHP7.4.
+$pipes = []; $process = proc_open([PHP_BINARY, '-d', 'disable_classes=PDO,SQLite3', __DIR__ . '/../bin/chat.php', 'send'], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, sys_get_temp_dir());
 if (!is_resource($process)) throw new RuntimeException('CLI fixture failed');
 fclose($pipes[0]); $out = stream_get_contents($pipes[1]); $err = stream_get_contents($pipes[2]); fclose($pipes[1]); fclose($pipes[2]);
 check(1, proc_close($process), 'Unsupported CLI exits nonzero without config/PDO'); check('', $out, 'CLI never reports success');
