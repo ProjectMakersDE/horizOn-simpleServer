@@ -50,6 +50,7 @@ require_once $baseDir . '/src/Friends/FriendsController.php';
 require_once $baseDir . '/src/Groups/GroupController.php';
 require_once $baseDir . '/src/Items/ItemController.php';
 require_once $baseDir . '/src/SharedObjects/SharedObjectController.php';
+require_once $baseDir . '/src/Matches/MatchController.php';
 require_once $baseDir . '/src/UserFeedback/UserFeedbackController.php';
 require_once $baseDir . '/src/UserLogs/UserLogsController.php';
 require_once $baseDir . '/src/CrashReporting/CrashReportingController.php';
@@ -135,6 +136,17 @@ $router->post($prefix . '/shared-objects/{collection}/query', [SharedObjectContr
 $router->post($prefix . '/shared-objects/{collection}/objects', [SharedObjectController::class, 'create']);
 $router->put($prefix . '/shared-objects/{collection}/objects/{objectId}', [SharedObjectController::class, 'update']);
 $router->delete($prefix . '/shared-objects/{collection}/objects/{objectId}', [SharedObjectController::class, 'delete']);
+
+// --- User Management ---
+// Matches: ordinary REST only; both ranked validation and realtime remain cloud capabilities.
+$router->get($prefix . '/matches', [MatchController::class, 'mine']);
+$router->get($prefix . '/matches/limits', [MatchController::class, 'limits']);
+$router->get($prefix . '/matches/open', [MatchController::class, 'open']);
+$router->get($prefix . '/matches/{id}', [MatchController::class, 'get']);
+$router->post($prefix . '/matches', [MatchController::class, 'create']);
+$router->post($prefix . '/matches/{id}/result', [MatchController::class, 'result']);
+$router->post($prefix . '/matches/{id}/ranked-run', [MatchController::class, 'rankedRun']);
+$router->post($prefix . '/matches/{id}/{action}', [MatchController::class, 'action']);
 
 // --- User Management ---
 $router->post($prefix . '/user-management/signup', [UserManagementController::class, 'signup']);

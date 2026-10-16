@@ -295,3 +295,26 @@ CREATE TABLE IF NOT EXISTS shared_object_payloads (
  id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY, collection_key VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
  revision BIGINT NOT NULL, payload MEDIUMBLOB NOT NULL, FOREIGN KEY(id) REFERENCES shared_objects(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Matches metadata and bytes have independent revisions; player revisions survive ordinary leave.
+CREATE TABLE IF NOT EXISTS matches_state (
+ id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY, revision BIGINT NOT NULL, store_revision BIGINT NOT NULL,
+ payload_revision BIGINT NOT NULL, payload_bytes INT NOT NULL, creator_id CHAR(36) NOT NULL,
+ status VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL, visibility VARCHAR(8) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+ strength BIGINT NOT NULL, open_for_join TINYINT NOT NULL, lobby_deadline BIGINT NOT NULL, due_millis BIGINT NOT NULL,
+ data TEXT NOT NULL, summary TEXT NOT NULL,
+ INDEX idx_matches_open(open_for_join,strength,id), INDEX idx_matches_status(status,id), INDEX idx_matches_due(due_millis,id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS match_payloads (
+ id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY, revision BIGINT NOT NULL, payload BLOB NOT NULL,
+ FOREIGN KEY(id) REFERENCES matches_state(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS player_matches (
+ user_id CHAR(36) PRIMARY KEY, active_user_id CHAR(36) NULL, revision BIGINT NOT NULL, data TEXT NOT NULL, cleanup_after CHAR(36) NULL,
+ INDEX idx_matches_deleted(active_user_id,user_id), FOREIGN KEY(active_user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS match_config (id INT PRIMARY KEY, revision BIGINT NOT NULL, board_key VARCHAR(128) NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS match_maintenance (
+ kind VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY, revision BIGINT NOT NULL, cutoff_millis BIGINT NOT NULL,
+ after_due BIGINT NULL, after_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
