@@ -27,6 +27,42 @@ class ItemService
         }
     }
     public function limits(): array { return $this->limits; }
+    /** Server-only original-instance transfer. The caller owns the durable source guard. */
+    public function escrowWithdraw(string $user,string $instance,int $expected): array
+    {
+        if (!$this->transactions->isRunning()) throw new LogicException('Original transfer requires the owning SQL scope');
+        // Marketplace has already locked the active user; keep that fence until commit.
+        $state=$this->store->inventory($user,true);
+        if ($state['revision']!==$expected) ItemRules::fail('REVISION_CONFLICT');
+        $original=null; $next=$state; $next['instances']=[];
+        foreach ($state['instances'] as $item) {
+            if ($item['instanceId']===$instance) $original=$item; else $next['instances'][]=$item;
+        }
+        if ($original===null) ItemRules::fail('ITEM_NOT_FOUND',404);
+        if ($original['equipped']) ItemRules::fail('ITEM_EQUIPPED',422);
+        $this->escrowTemplate($original['itemKey']);
+        $next['revision']=ItemRules::next($state['revision']); $this->store->saveInventory($user,$state,$next,false);
+        return $original;
+    }
+    public function escrowTemplate(string $key): void
+    {
+        if (!$this->transactions->isRunning()) throw new LogicException('Template fence requires the owning SQL scope');
+        $template=$this->store->template($key,true);
+        if ($template===null || !$template['active']) ItemRules::fail('ITEM_TEMPLATE_NOT_FOUND',404);
+    }
+    public function escrowReceive(string $user,array $original): array
+    {
+        if (!$this->transactions->isRunning()) throw new LogicException('Original transfer requires the owning SQL scope');
+        // The source caller holds the active-user fence in this same scope.
+        $state=$this->store->inventory($user,true);
+        if (count($state['instances']) >= $this->limits['inventory']) ItemRules::fail('INVENTORY_FULL',422);
+        foreach ($state['instances'] as $item) if ($item['instanceId']===$original['instanceId']) ItemRules::fail('STATE_CONFLICT');
+        // Returning owned goods does not depend on a still-active catalogue template.
+        $original['properties']=ItemRules::properties((object)$original['properties']); $original['equipped']=false;
+        $next=$state; $next['instances'][]=$original; $next['revision']=ItemRules::next($state['revision']);
+        $this->store->saveInventory($user,$state,$next,true);
+        return ['instanceId'=>$original['instanceId'],'itemKey'=>$original['itemKey']];
+    }
     private function view(string $user,array $state): array
     { return ['userId'=>$user,'revision'=>$state['revision'],'instances'=>array_values($state['instances']),'limits'=>$this->limits,'serverTime'=>PlayerValuesLedger::instant(($this->clock)())]; }
     public function get(string $user): array

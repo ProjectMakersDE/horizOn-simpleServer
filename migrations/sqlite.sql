@@ -327,3 +327,20 @@ CREATE TABLE IF NOT EXISTS match_config (id INTEGER PRIMARY KEY CHECK(id=1),revi
 CREATE TABLE IF NOT EXISTS match_maintenance (
  kind TEXT PRIMARY KEY, revision INTEGER NOT NULL, cutoff_millis INTEGER NOT NULL, after_due INTEGER, after_id TEXT
 );
+
+-- Marketplace preserves original escrow after player deletion; no valuable row has a TTL.
+CREATE TABLE IF NOT EXISTS market_header(id INTEGER PRIMARY KEY,version INTEGER NOT NULL,revision INTEGER NOT NULL,data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS market_rules(item_key TEXT PRIMARY KEY COLLATE BINARY,data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS player_market(user_id TEXT PRIMARY KEY,active_user_id TEXT,revision INTEGER NOT NULL,data TEXT NOT NULL,
+ FOREIGN KEY(active_user_id) REFERENCES users(id) ON DELETE SET NULL);
+CREATE INDEX IF NOT EXISTS idx_market_deleted ON player_market(active_user_id,user_id);
+CREATE TABLE IF NOT EXISTS market_listings(id TEXT PRIMARY KEY COLLATE BINARY,revision INTEGER NOT NULL,status TEXT NOT NULL COLLATE BINARY,
+ item_key TEXT NOT NULL COLLATE BINARY,price INTEGER NOT NULL,created_millis INTEGER NOT NULL,due_kind INTEGER NOT NULL,due_millis INTEGER NOT NULL,
+ return_owner TEXT NOT NULL,data TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_market_price ON market_listings(status,price,id);
+CREATE INDEX IF NOT EXISTS idx_market_item_price ON market_listings(status,item_key,price,id);
+CREATE INDEX IF NOT EXISTS idx_market_admin ON market_listings(created_millis,id);
+CREATE INDEX IF NOT EXISTS idx_market_admin_status ON market_listings(status,created_millis,id);
+CREATE INDEX IF NOT EXISTS idx_market_due ON market_listings(due_kind,due_millis,id);
+CREATE INDEX IF NOT EXISTS idx_market_owner ON market_listings(return_owner,id);
+CREATE TABLE IF NOT EXISTS market_maintenance(kind TEXT PRIMARY KEY,revision INTEGER NOT NULL,data TEXT NOT NULL);

@@ -1440,3 +1440,60 @@ player-session lookup for app requests and no feature SQL for either family;
 existing bootstrap/migrations/API-key/rate middleware remain additional.
 `bash tests/test.sh` includes the real six-route/auth/foreign-user and twelve-route
 operator refusal checks on the suite-owned temporary SQLite installation.
+
+### Marketplace: original items in escrow
+
+Marketplace starts disabled and implements the ten `/api/v1/app/marketplace` routes with
+SQLite/MySQL transactions and `realtime: false`. Use the same project key and active player
+session as Items/Player Values. Read `/marketplace/limits` and paged `/marketplace/rules`
+before confirming an original create request. Creation binds `expectedConfigRevision` and
+`expectedInventoryRevision`; purchase binds the exact listing revision, price and currency.
+Persist the original UUID, canonical UTC millisecond `issuedAt` and complete body before HTTP.
+Send once, reconcile `/marketplace/operations/{operationId}`, and replay only that same intent.
+An absent receipt or expired operation never authorizes a replacement ID.
+
+Local operator equivalents live in `php bin/marketplace.php`:
+
+- `config`, `configure REV < JSON`, `limits`, `rules [AFTER|- [LIMIT]]`, `rule ITEM_KEY REV < JSON`;
+- `list [STATUS|- [LIMIT [CURSOR]]]`, `get LISTING_ID`, `cancel LISTING_ID REV < {"note":"..."}`;
+- `retry-return LISTING_ID`, `recover LISTING_ID REV < {"recipientId":"UUID","note":"..."}`;
+- `player USER_ID`, `moderation USER_ID`, `moderate USER_ID REV < {"banUntil":null,"reason":""}`, `cleanup`.
+
+First create an Items template and explicitly save its Player Values currency definition.
+Set a price rule (`active`, positive safe-integer `minPrice`/`maxPrice`), then enable the config
+with `enabled`, `currencyKey` and integer `feeBps`0..10000. Currency follows the existing PV key
+grammar, including `chest.gold`, `gold-coin` and `1coin`. The quoted currency/fee remain frozen
+on each listing. Fees use exact integer floor arithmetic;100% fee deliberately credits zero.
+The local installation defaults to Enterprise bounds:25 open escrows/player,10000 retained
+listings,100 operation receipts and history references/player,120 accepted create/buy per
+project minute and1000ms/player cooldown. `MarketRules::limits()` exposes all five nominal
+profiles; a downgrade never destroys held items. Matching retained originals precede current
+ban/config/rate limits. Receipt eviction raises a permanent timestamp floor; arbitrarily late
+or out-of-order unknown intents can be refused safely.
+
+A successful buy atomically transfers the unchanged instance ID, original properties and
+creation time, debits the full buyer price and credits the strict seller net under current
+balance/day caps. No clamping or deferred payout. Both active-user, template and saved currency
+configuration fences participate in the same explicit PDO scope. Internal original-item and
+settlement providers require that scope; no public grant or operator HTTP API is added.
+
+Cancel/expiry retains the item in `return_pending`. A separate transaction hands an immutable
+trusted item-return intent to Inbox; full Inbox stays pending. Unclaimed original-item returns
+remain valuable and cannot expire or be removed. Inbox claim keeps the existing `playerValues`
+snapshot and adds `items: [{instanceId,itemKey}]` (empty for value-only claims). Replay returns
+original references without recreating a discarded/resold item. Public broadcasts/composition
+cannot create this attachment. Deleted-owner escrow remains recoverable only through explicit
+revision-bound operator recovery to an active player, with at most eight audit records.
+
+Run `cleanup-scheduled` every30minutes in the host scheduler and `cleanup-deleted [AFTER_USER]`
+for bounded identity cleanup. Each scheduled/admin cursor is durable and independent, examines
+at most20 indexed rows, alternates return/terminal priority and advances past full Inbox or
+failed rows. Valuable nonterminal escrow is never TTL-deleted. Terminal audits last7days.
+Search returns at most50 offers from at most256 indexed candidates, including explicit empty
+continuation pages; callers advance pages explicitly. No automatic polling or sale fanout.
+
+Local SQL command profiles (excluding HTTP auth/bootstrap) are measured separately from Mongo
+profiles and capacity: initial create9 SELECT/4 DML and buy14 SELECT/7 DML in the functional
+fixture. `tests/marketplace.php` prints the measured counts. Sparse database/index allocation
+is not a per-player capacity guarantee. Run `bash tests/test.sh`; dedicated tests also support
+an explicit loopback `HORIZON_MARKET_TEST_DSN` whose database must match `task1015_<hex>`.
