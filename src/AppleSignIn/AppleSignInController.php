@@ -160,8 +160,9 @@ class AppleSignInController
         // Issue session token (30 days) — matches the anonymous sign-in pattern.
         $sessionToken = bin2hex(random_bytes(32));
         $expiresAt = gmdate('Y-m-d\TH:i:s', time() + 86400 * 30);
-        $upd = $pdo->prepare('UPDATE users SET session_token = ?, session_expires_at = ? WHERE id = ?');
-        $upd->execute([$sessionToken, $expiresAt, $user['id']]);
+        $loginMillis = Database::nowMillis();
+        $upd = $pdo->prepare('UPDATE users SET session_token = ?, session_expires_at = ?, last_login_millis = CASE WHEN last_login_millis IS NULL OR last_login_millis < ? THEN ? ELSE last_login_millis END WHERE id = ?');
+        $upd->execute([$sessionToken, $expiresAt, $loginMillis, $loginMillis, $user['id']]);
 
         return [
             'authStatus' => 'AUTHENTICATED',

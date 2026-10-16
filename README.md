@@ -24,6 +24,7 @@ Built for indie game developers and small studios who want full control over the
 - Gift code validation and redemption (with cosmetic unlocks via `grants`)
 - Player profile: avatar, frame and up to 3 badges from a cosmetics catalog, shown in leaderboard entries
 - Explicit atomic player-statistics batches: sum/max/min/last, UTC resets and safe original-ID retries
+- Friends: bilateral requests, explicit revisions, blocklists and atomic Inbox notifications
 - User feedback collection
 - User log ingestion (INFO, WARN, ERROR)
 - Crash reporting with automatic grouping, fingerprinting, and regression detection
@@ -72,6 +73,10 @@ This table compares the self-hosted Simple Server with the fully managed [horizO
 | **Statistics** | | |
 | Atomic session batches, conditional catalog, UTC day/week resets | :white_check_mark: | :white_check_mark: |
 | Definition management | local operator CLI / SQL | dashboard, per-project tier limits |
+| **Friends** | | |
+| Requests, friends, blocks and Inbox notifications (session bound) | :white_check_mark: | :white_check_mark: |
+| Relationship inspection | local operator CLI | scoped dashboard / Account Key |
+| Realtime invalidation | :x: | :white_check_mark: |
 | **User Feedback** | | |
 | Feedback submission | :white_check_mark: | :white_check_mark: |
 | **User Logs** | | |
@@ -826,3 +831,72 @@ After commit, up to eight independent Inbox handoffs are attempted. `INBOX_FULL`
 SQL startup creates only two bounded tables and one singleton catalogue when absent. The catalogue is read in full under a shared lock for affected report transactions rather than using a hosted cache. Progress has a monotone catalogue revision and CAS revision, one row per player, and cascades with that user. There is no player scan, cloud-save copy or polling loop. An unrelated statistic report avoids progress reads/writes; no login or validated-run-start reads are added. For server-side composition, pass the same `SqlTransaction` instance to cooperating Statistics/Achievement/Inbox/PlayerValues services; delivery waits until its caller commits an external transaction.
 
 Run `php tests/achievements.php`, `php tests/achievements-migration.php` and the full `tests/test.sh`. The dedicated MySQL probe requires an explicit loopback `HORIZON_ACHIEVEMENTS_TEST_DSN` whose database name starts `task1008_<hex>`; it never discovers a host database from an environment file. This self-hosted maximum is separate from hosted20/50/75/100/250 active tier limits. Admin configuration stays CLI-only and rejects direct HTTP before bootstrap.
+
+## Friends (self-hosted REST)
+
+`GET /api/v1/app/friends?userId=...`, exact `/friends/find?userId=...&query=...`,
+and `POST /friends/{request,accept,decline,cancel,remove,block,unblock}` use the
+matching player Bearer session. Every mutation requires an explicit nonnegative
+safe-integer `expectedRevision`; decisions additionally require the exact current
+`requestId`. A timeout/409 needs a fresh read and an explicit decision. Never
+substitute a revision and silently repeat. Friend codes encode the public UUID;
+they do not authorize a write or search by name/email.
+
+Self-hosted limits are200 friends,20 incoming,20 outgoing and100 blocks. Both
+relationship CAS writes and ordinary30-day Inbox notices commit in one explicit
+connection-bound transaction. Full Inbox rolls everything back. Crossing requests
+need explicit acceptance. Blocking clears both directions without notification;
+unblocking never restores relationships. A shared `FriendsBlockPolicy` joins the
+caller's PDO scope and reads both blocklist projections in one normal consistent
+SELECT, preserving an already established MySQL snapshot. Relationship mutations
+and exact lookups use sorted user-row locks to fence deletion and block changes;
+SQLite uses the existing
+BEGIN IMMEDIATE scope. No global transaction manager, online flag or heartbeat.
+
+Public displays use one bounded Player Profile projection, without auth fields,
+email, unlocks, values or saves. Since this edition stores the current session on
+the user row, its actual anonymous/Apple sign-in update also stores the monotone
+maximum `last_login_millis`. No extra sign-in query is added. Legacy rows remain
+null/unknown; ordinary HTTP traffic never changes this timestamp. The additive
+bootstrap checks both activity columns in the existing single metadata query.
+
+Operator inspection is local CLI only:
+
+```bash
+php bin/friends.php player PLAYER_UUID
+php bin/friends.php limits
+php bin/friends.php cleanup-deleted
+```
+
+Public Account-Key/admin impersonation and realtime/Chat remain unsupported.
+When an operator physically deletes a user, a nullable foreign key retains its
+relationship row as an indexed deletion anchor, including block-only targets at
+revision0. The related-player index finds arbitrarily many incoming blocks.
+Schedule the local cleanup command to process at most10 deleted anchors with at
+most50 referencing players each per invocation; repeat until complete. A deliberate
+operator restore rebinds only its FK anchor and preserves all relationships/revisions,
+so a restored first item cannot starve later deleted players. Each
+changed peer gets a CAS revision, and the source anchor is deleted only once no
+references remain. Active/restored users are never silently purged. Directly
+removing relationship tables or disabling foreign keys bypasses these guarantees.
+All SQL services participating in a larger transaction must receive the same
+PDO and explicit `SqlTransaction` instance.
+
+Validation: `bash tests/test.sh` includes real HTTP/session/error cases, isolated
+SQLite concurrency, second-CAS/Inbox/outer rollback, uncertain commit, indexed
+resumable cleanup and old-schema bootstrap. The same SQL probe supports only an
+explicit loopback MySQL `task1009_<hex>` database via `HORIZON_FRIENDS_TEST_DSN`,
+`HORIZON_FRIENDS_TEST_USER` and `HORIZON_FRIENDS_TEST_PASSWORD`; it never infers a
+host or database from application credentials. Real MySQL/PHP7.4 execution is
+recorded separately after its isolated probe.
+
+Isolated SQL statement counts, excluding HTTP authentication/bootstrap and showing
+BEGIN/COMMIT separately: an empty snapshot uses two SELECTs, a populated snapshot
+three, an exact lookup three plus its transaction, a standalone bilateral block
+policy one plus its transaction, and a reviewed request no-op four plus its
+transaction with zero writes. A first request or acceptance uses six SELECTs and
+seven bounded DML statements including both reverse-index replacements and the
+Inbox. Existing/missing peers and empty reference sets can reduce the write count.
+The visible-profile fanout stays one selected bulk query for at most240 peers;
+reverse references are at most340 per player. These are service statement counts,
+not hosted Signup-relative latency or capacity measurements.

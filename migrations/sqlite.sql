@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS users (
     badges TEXT,
     unlocks TEXT,
     created_at_millis INTEGER,
+    last_login_millis INTEGER,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -232,3 +233,17 @@ CREATE TABLE IF NOT EXISTS player_values (
 CREATE TABLE IF NOT EXISTS inbox_catalog (id INTEGER PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS inbox_state (user_id TEXT PRIMARY KEY, data TEXT NOT NULL,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE);
+
+-- Friends: nullable active pointer retains an indexed deletion anchor, including block-only targets.
+CREATE TABLE IF NOT EXISTS friends_state (
+    user_id TEXT PRIMARY KEY, active_user_id TEXT, revision INTEGER NOT NULL,
+    friends TEXT NOT NULL, incoming TEXT NOT NULL, outgoing TEXT NOT NULL, blocked TEXT NOT NULL,
+    FOREIGN KEY (active_user_id) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_friends_deleted ON friends_state(active_user_id,user_id);
+CREATE TABLE IF NOT EXISTS friends_references (
+    owner_user_id TEXT NOT NULL, related_user_id TEXT NOT NULL,
+    PRIMARY KEY(owner_user_id,related_user_id),
+    FOREIGN KEY(owner_user_id) REFERENCES friends_state(user_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_friends_related ON friends_references(related_user_id,owner_user_id);
