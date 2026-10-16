@@ -60,6 +60,30 @@ class PlayerValuesService
         return $config;
     }
 
+    /** Internal atomic marketplace settlement; source listing transition owns replay protection. */
+    public function transferEscrow(string $buyer,string $seller,string $key,int $price,int $net,string $listing,int $issued): void
+    {
+        if (!$this->transactions->isRunning()) throw new LogicException('Settlement requires the owning SQL scope');
+        $ids=[$buyer,$seller]; sort($ids,SORT_STRING);
+        $actors=$this->pdo->prepare('SELECT id FROM users WHERE id IN (?,?) ORDER BY id'.($this->mysql?' FOR UPDATE':''));$actors->execute($ids);
+        if(count($actors->fetchAll(PDO::FETCH_COLUMN))!==2)PlayerValuesLedger::fail('PLAYER_NOT_FOUND','Player not found',404);
+        PlayerValuesLedger::key($key); PlayerValuesLedger::integer($price,1); PlayerValuesLedger::integer($net,0,$price);
+        $config=$this->config(false,true); $definitions=array_column($config['definitions'],null,'key');
+        if (!isset($definitions[$key])) PlayerValuesLedger::fail('INVALID_REQUEST','Currency requires a saved Player Values definition',400);
+        $now=($this->clock)(); $debit=PlayerValuesLedger::initialize($this->state($buyer),$config['definitions'],$now);
+        $credit=$net>0?PlayerValuesLedger::initialize($this->state($seller),$config['definitions'],$now):null;
+        if (($debit['values'][$key]??0)<$price) PlayerValuesLedger::fail('INSUFFICIENT_BALANCE','Insufficient balance');
+        $debit['values'][$key]-=$price;
+        if ($net>0) [$credit,$ignored]=PlayerValuesLedger::grant($credit,$definitions,[['key'=>$key,'amount'=>$net]]);
+        foreach ([[$buyer,$debit,-$price],[$seller,$credit,$net]] as [$user,$state,$amount]) {
+            if ($amount===0) continue;
+            $receipt=['operationId'=>'marketplace:'.$listing,'payloadHash'=>PlayerValuesLedger::hash('marketplace',$listing,$user,$key,(string)$amount),
+                'source'=>'marketplace:'.$listing,'issuedAtMillis'=>$issued,'recordedAtMillis'=>$now,
+                'issuedAt'=>PlayerValuesLedger::instant($issued),'recordedAt'=>PlayerValuesLedger::instant($now),'applied'=>[['key'=>$key,'amount'=>$amount]],'note'=>null,'items'=>[]];
+            $this->save($user,PlayerValuesLedger::record($state,$receipt,$now));
+        }
+    }
+
     /** Local operator only. Expected revision is mandatory, including initial revision zero. */
     public function configure(array $request, int $expectedRevision): array
     {

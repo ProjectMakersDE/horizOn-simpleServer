@@ -1,0 +1,14 @@
+<?php
+
+declare(strict_types=1);
+require_once __DIR__.'/../src/Core/Config.php';
+require_once __DIR__.'/../src/Marketplace/MarketService.php';
+$dsn=getenv('HORIZON_MARKET_TEST_DSN');if($dsn&&!preg_match('/^mysql:host=127\.0\.0\.1;port=[0-9]{1,5};dbname=task1015_[a-f0-9]+;charset=utf8mb4$/D',$dsn))throw new RuntimeException('Only own task1015 loopback DB allowed');
+$path=$dsn?null:tempnam(sys_get_temp_dir(),'horizon-task1015-legacy-');$settings=tempnam(sys_get_temp_dir(),'horizon-task1015-settings-');$pdo=null;
+try{
+    $pdo=new PDO($dsn?:'sqlite:'.$path,$dsn?getenv('HORIZON_MARKET_TEST_USER'):null,$dsn?getenv('HORIZON_MARKET_TEST_PASSWORD'):null,[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION,PDO::ATTR_DEFAULT_FETCH_MODE=>PDO::FETCH_ASSOC]);if(!$dsn)$pdo->exec('PRAGMA foreign_keys=ON');$driver=$dsn?'mysql':'sqlite';$sql=file_get_contents(__DIR__.'/../migrations/'.$driver.'.sql');$cut=strpos($sql,'-- Marketplace');if($cut===false)throw new RuntimeException('Migration boundary missing');$pdo->exec(substr($sql,0,$cut));
+    $id=Database::uuid();$pdo->prepare('INSERT INTO users(id,display_name,anonymous_token,created_at) VALUES(?,?,?,?)')->execute([$id,'Existing identity',Database::uuid(),'2026-10-16 12:00:00']);$before=$pdo->query('SELECT id,display_name,anonymous_token,created_at FROM users')->fetchAll();file_put_contents($settings,'DB_DRIVER='.$driver."\n");Config::load($settings);$property=(new ReflectionClass(Database::class))->getProperty('pdo');if(PHP_VERSION_ID<80100)$property->setAccessible(true);$property->setValue(null,$pdo);Database::migrate();Database::migrate();
+    if($before!==$pdo->query('SELECT id,display_name,anonymous_token,created_at FROM users')->fetchAll())throw new RuntimeException('Identity mutated');$s=new MarketService($pdo);if($s->state($id)['state']['revision']!==0||$s->config()['config']['revision']!==0||(int)$pdo->query('SELECT COUNT(*) FROM player_market')->fetchColumn()!==0||(int)$pdo->query('SELECT COUNT(*) FROM market_header')->fetchColumn()!==0)throw new RuntimeException('Migration/read inserted feature state');
+    $indexes=$dsn?$pdo->query("SELECT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='market_listings'")->fetchAll(PDO::FETCH_COLUMN):array_column($pdo->query('PRAGMA index_list(market_listings)')->fetchAll(),'name');foreach(['idx_market_price','idx_market_item_price','idx_market_admin','idx_market_admin_status','idx_market_due','idx_market_owner']as$index)if(!in_array($index,$indexes,true))throw new RuntimeException('Missing '.$index);
+    echo'PASS: Marketplace legacy '.($dsn?'MySQL':'SQLite')." migration is idempotent, preserves old identities/features and lazy state, adds all bounded seek indexes\n";
+}finally{if(isset($property))$property->setValue(null,null);$pdo=null;@unlink($settings);if($path!==null)foreach([$path,$path.'-wal',$path.'-shm']as$file)if(is_file($file))unlink($file);}

@@ -14,6 +14,8 @@ class SqlTransaction
     private bool $rollbackOnly = false;
     public function __construct(PDO $pdo) { $this->pdo = $pdo; $this->mysql = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql'; }
     public function owns(PDO $pdo): bool { return $this->pdo === $pdo; }
+    /** Internal providers may join only this explicit scope, not an unrelated PDO transaction. */
+    public function isRunning(): bool { return $this->depth > 0; }
     public function isActive(): bool { return $this->depth > 0 || $this->pdo->inTransaction(); }
     public function run(callable $work)
     {

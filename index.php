@@ -52,6 +52,7 @@ require_once $baseDir . '/src/Items/ItemController.php';
 require_once $baseDir . '/src/SharedObjects/SharedObjectController.php';
 require_once $baseDir . '/src/Matches/MatchController.php';
 require_once $baseDir . '/src/Chat/ChatController.php';
+require_once $baseDir . '/src/Marketplace/MarketController.php';
 require_once $baseDir . '/src/UserFeedback/UserFeedbackController.php';
 require_once $baseDir . '/src/UserLogs/UserLogsController.php';
 require_once $baseDir . '/src/CrashReporting/CrashReportingController.php';
@@ -164,6 +165,18 @@ $router->delete($prefix . '/shared-objects/{collection}/objects/{objectId}', [Sh
 
 // --- User Management ---
 // Matches: ordinary REST only; both ranked validation and realtime remain cloud capabilities.
+// Marketplace: ordinary REST parity; operator administration remains local CLI only.
+$router->get($prefix . '/marketplace/limits', [MarketController::class, 'limits']);
+$router->get($prefix . '/marketplace/rules', [MarketController::class, 'rules']);
+$router->get($prefix . '/marketplace', [MarketController::class, 'state']);
+$router->get($prefix . '/marketplace/listings', [MarketController::class, 'search']);
+$router->get($prefix . '/marketplace/listings/{id}', [MarketController::class, 'get']);
+$router->get($prefix . '/marketplace/operations/{operationId}', [MarketController::class, 'operation']);
+$router->post($prefix . '/marketplace/listings', [MarketController::class, 'create']);
+$router->post($prefix . '/marketplace/listings/{id}/buy', [MarketController::class, 'buy']);
+$router->post($prefix . '/marketplace/listings/{id}/cancel', [MarketController::class, 'cancel']);
+$router->post($prefix . '/marketplace/listings/{id}/retry-return', [MarketController::class, 'retryReturn']);
+
 $router->get($prefix . '/matches', [MatchController::class, 'mine']);
 $router->get($prefix . '/matches/limits', [MatchController::class, 'limits']);
 $router->get($prefix . '/matches/open', [MatchController::class, 'open']);

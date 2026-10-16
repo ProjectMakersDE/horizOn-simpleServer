@@ -52,7 +52,7 @@ class InboxRules
         if (!is_string($operation) || !preg_match('/^([0-9]{1,16}):[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/iD', $operation, $match)) self::invalid('Invalid operationId');
         return (int)$match[1];
     }
-    public static function content(array $input): array
+    public static function content(array $input,bool $trustedReturn=false): array
     {
         $type = $input['type'] ?? null;
         if (!is_string($type) || !preg_match('/^[A-Za-z0-9._-]{1,32}$/D', $type)) self::invalid('Invalid type');
@@ -66,7 +66,13 @@ class InboxRules
         ksort($parameters, SORT_STRING);
         $attachment = $input['attachment'] ?? null;
         if ($attachment !== null) {
-            if (!is_array($attachment) || array_diff(array_keys($attachment), ['values'])) self::invalid('Only value rewards are supported');
+            if (!is_array($attachment) || array_diff(array_keys($attachment), $trustedReturn ? ['values','itemReturn'] : ['values'])) self::invalid('Unsupported attachment');
+            $itemReturn=$attachment['itemReturn']??null;
+            if ($itemReturn!==null) {
+                if (!$trustedReturn || !is_array($itemReturn) || array_diff(array_keys($itemReturn),['listingId','instanceId','itemKey']) || count($itemReturn)!==3) self::invalid('Trusted return source required');
+                foreach (['listingId','instanceId'] as $field) if (self::uuid($itemReturn[$field])!==$itemReturn[$field]) self::invalid('Canonical return identity required');
+                if (!is_string($itemReturn['itemKey']) || !preg_match('/^[a-z][a-z0-9_]{0,63}$/D',$itemReturn['itemKey'])) self::invalid('Invalid return item');
+            }
             $values = PlayerValuesLedger::list(array_key_exists('values', $attachment) ? $attachment['values'] : [], 8); $keys = [];
             foreach ($values as &$value) {
                 if (!is_array($value)) self::invalid('Invalid attachment');
@@ -75,17 +81,20 @@ class InboxRules
                 $keys[$key] = true; $value = ['key' => $key, 'amount' => $amount];
             }
             unset($value); usort($values, static function ($a, $b) { return strcmp($a['key'], $b['key']); });
+            if ($itemReturn!==null && $values) self::invalid('Item returns cannot contain value rewards');
             $attachment = ['values' => $values];
+            if ($itemReturn!==null) $attachment['itemReturn']=$itemReturn;
         }
         return ['type' => $type, 'reference' => $reference, 'textKey' => $text, 'parameters' => (object)$parameters,
             'expiresAt' => self::instant(self::millis($input['expiresAt'] ?? null)), 'attachment' => $attachment];
     }
-    public static function valuable(array $message): bool { return !empty($message['content']['attachment']['values']); }
+    public static function attachmentValuable(?array $attachment): bool { return !empty($attachment['values']) || isset($attachment['itemReturn']); }
+    public static function valuable(array $message): bool { return self::attachmentValuable($message['content']['attachment']); }
     public static function retained(array $message, int $now): bool { return self::millis($message['content']['expiresAt']) > $now || (self::valuable($message) && !$message['claimed']); }
     public static function validate(array $content, int $now, bool $pending = false): void
     {
         $expiry = self::millis($content['expiresAt']);
-        if (($expiry <= $now && !($pending && !empty($content['attachment']['values']))) || $expiry > $now + self::RETENTION) self::invalid('Expiry must be in the next30 days');
+        if (($expiry <= $now && !($pending && self::attachmentValuable($content['attachment']))) || $expiry > $now + self::RETENTION) self::invalid('Expiry must be in the next30 days');
         $worst = self::message('broadcast:00000000-0000-0000-0000-000000000000', $content, $now, str_repeat('x', 128), str_repeat('0', 64));
         if (strlen(self::json($worst)) > 1024) self::invalid('Message exceeds1024 UTF-8 bytes');
     }

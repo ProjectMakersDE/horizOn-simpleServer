@@ -91,7 +91,7 @@ class InboxService
             $entry['parameters'] = (object)$entry['parameters'];
             $type = $entry['type']; if (!isset($counts[$type])) $counts[$type] = ['total' => 0, 'unread' => 0, 'claimable' => 0];
             $counts[$type]['total']++; if (!$entry['read']) $counts[$type]['unread']++;
-            if (!$entry['claimed'] && !empty($entry['attachment']['values'])) $counts[$type]['claimable']++;
+            if (!$entry['claimed'] && InboxRules::attachmentValuable($entry['attachment'])) $counts[$type]['claimable']++;
         }
         unset($entry);
         $cursor = hash('sha256', implode(':', [$catalog['apiKeyId'], $player['id'], $state['revision'], $catalog['revision'], $lastExpiry]));
@@ -114,7 +114,7 @@ class InboxService
             $player = $this->player($user, true); $catalog = $this->catalog(1); $state = $this->state($user, true); $now = ($this->clock)();
             $found = null; foreach ($this->entries($player, $state, $catalog, $now) as $row) if ($row['id'] === $entry) $found = $row;
             if ($found === null) { if ($remove) return $this->view($player, $state, $catalog, $now); InboxRules::fail('ENTRY_NOT_FOUND', 'Inbox entry not found', 404); }
-            if ($remove && !empty($found['attachment']['values']) && !$found['claimed']) InboxRules::fail('UNCLAIMED_REWARD', 'Claim this reward before removing it');
+            if ($remove && InboxRules::attachmentValuable($found['attachment']) && !$found['claimed']) InboxRules::fail('UNCLAIMED_REWARD', 'Claim this reward before removing it');
             if (!$remove && $found['read']) return $this->view($player, $state, $catalog, $now);
             $next = $this->prune($state, $catalog, $now);
             if ($found['kind'] === 'message') {
@@ -144,8 +144,10 @@ class InboxService
                 }
             }
             if ($found === null) InboxRules::fail('ENTRY_NOT_FOUND', 'Inbox entry not found', 404);
-            if (empty($found['attachment']['values'])) InboxRules::fail('NO_ATTACHMENT', 'This entry has no reward', 422);
-            if ($found['claimed']) return ['entryId' => $entry, 'replayed' => true, 'inbox' => $this->view($player, $state, $catalog, $now), 'playerValues' => $this->values->get($user)];
+            if (!InboxRules::attachmentValuable($found['attachment'])) InboxRules::fail('NO_ATTACHMENT', 'This entry has no reward', 422);
+            $itemReturn=$found['attachment']['itemReturn']??null;
+            $references=$itemReturn===null?[]:[['instanceId'=>$itemReturn['instanceId'],'itemKey'=>$itemReturn['itemKey']]];
+            if ($found['claimed']) return ['entryId' => $entry, 'replayed' => true, 'inbox' => $this->view($player, $state, $catalog, $now), 'playerValues' => $this->values->get($user),'items'=>$references];
             $next = $this->prune($state, $catalog, $now);
             if ($found['kind'] === 'message') {
                 foreach ($next['entries'] as &$row) if ($row['id'] === $entry) { $row['read'] = true; $row['claimed'] = true; }
@@ -155,8 +157,13 @@ class InboxService
                 $next['markers'][] = ['id' => $entry, 'read' => true, 'claimed' => true, 'removed' => false];
             }
             $next = InboxRules::bump($next); $this->save($user, $next);
-            $values = $this->values->grant($user, $found['attachment']['values'], 'inbox:' . $entry, $now, 'inbox:' . $entry);
-            return ['entryId' => $entry, 'replayed' => false, 'inbox' => $this->view($player, $next, $catalog, $now), 'playerValues' => $values];
+            if ($itemReturn!==null) {
+                require_once __DIR__.'/../Marketplace/MarketService.php';
+                try { $references=(new MarketService($this->pdo,$this->clock,$this->transactions))->claimReturn($user,$entry,$itemReturn); }
+                catch (MarketFailure $failure) { InboxRules::fail($failure->errorCode,$failure->getMessage(),$failure->status); }
+                $values=$this->values->get($user);
+            } else $values = $this->values->grant($user, $found['attachment']['values'], 'inbox:' . $entry, $now, 'inbox:' . $entry);
+            return ['entryId' => $entry, 'replayed' => false, 'inbox' => $this->view($player, $next, $catalog, $now), 'playerValues' => $values,'items'=>$references];
         });
     }
     private function validateRewards(array $content): void
@@ -179,10 +186,20 @@ class InboxService
             return $result;
         });
     }
-    private function delivery(string $user, array $input, string $operation, int $issued, string $source, bool $pending): array
+    /** Marketplace's designated pending-source adapter, never public/admin composition. */
+    public function deliverItemReturnPending(string $user,array $input,string $operation,int $issued,string $source,callable $complete): array
+    {
+        if (!$this->transactions->isRunning()) throw new LogicException('Return delivery requires the source SQL scope');
+        return $this->transaction(function()use($user,$input,$operation,$issued,$source,$complete){
+            $result=$this->delivery($user,$input,$operation,$issued,$source,true,true);
+            if (!$complete($this->pdo,$result['entryId'])) InboxRules::fail('SOURCE_NOT_PENDING','Return source changed; delivery rolled back');
+            return $result;
+        });
+    }
+    private function delivery(string $user, array $input, string $operation, int $issued, string $source, bool $pending,bool $trustedReturn=false): array
     {
         InboxRules::text($operation, 128, false); InboxRules::text($source, 200, false);
-        $this->player($user, true); $state = $this->state($user, true); $content = InboxRules::content($input);
+        $this->player($user, true); $state = $this->state($user, true); $content = InboxRules::content($input,$trustedReturn);
         $hash = InboxRules::hash($content, $source, $issued); $receipt = InboxRules::replay($state, $operation, $hash);
         if ($receipt !== null) return ['entryId' => $receipt['entryId'], 'replayed' => true];
         $now = ($this->clock)();
