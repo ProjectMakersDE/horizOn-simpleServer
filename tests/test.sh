@@ -1090,6 +1090,10 @@ if php tests/shared-objects.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)
 if php tests/shared-objects-notice.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 if php tests/shared-objects-migration.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 if python3 tests/shared-objects-seek.py; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/matches-http.php "$BASE_URL" "$API_KEY"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/matches.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/matches-migration.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if python3 tests/matches-seek.py; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 if php tests/items-migration.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
 # Exercise direct existing-file dispatch, which Apache/CGI can bypass the index router for.
@@ -1142,6 +1146,10 @@ if [ -z "$IT_CLI_BODY" ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); echo
 SO_CLI_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TEST_PORT}/bin/shared-objects.php")
 assert_status 'Shared Objects operator rejects direct HTTP before bootstrap' 403 "$SO_CLI_STATUS"
 SO_CLI_BODY=$(curl -s "http://localhost:${TEST_PORT}/bin/shared-objects.php")
+MATCH_CLI_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TEST_PORT}/bin/matches.php")
+assert_status "Matches operator CLI is HTTP forbidden" 403 "$MATCH_CLI_STATUS"
+MATCH_CLI_BODY=$(curl -s "http://localhost:${TEST_PORT}/bin/matches.php")
+if [ -z "$MATCH_CLI_BODY" ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); echo 'FAIL: Matches operator exposed data'; fi
 if [ -z "$SO_CLI_BODY" ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); echo 'FAIL: Shared Objects operator exposed data'; fi
 
 SO_RECIPE_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TEST_PORT}/examples/shared_objects_notice.php")

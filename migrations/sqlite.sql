@@ -303,3 +303,27 @@ CREATE TABLE IF NOT EXISTS shared_object_payloads (
  id TEXT PRIMARY KEY COLLATE BINARY, collection_key TEXT NOT NULL COLLATE BINARY, revision INTEGER NOT NULL, payload BLOB NOT NULL,
  FOREIGN KEY(id) REFERENCES shared_objects(id) ON DELETE CASCADE
 );
+
+-- Matches: summary-only seeks, paired opaque bytes and retained player revision/deletion anchors.
+CREATE TABLE IF NOT EXISTS matches_state (
+ id TEXT PRIMARY KEY COLLATE BINARY, revision INTEGER NOT NULL, store_revision INTEGER NOT NULL,
+ payload_revision INTEGER NOT NULL, payload_bytes INTEGER NOT NULL, creator_id TEXT NOT NULL,
+ status TEXT NOT NULL, visibility TEXT NOT NULL, strength INTEGER NOT NULL, open_for_join INTEGER NOT NULL,
+ lobby_deadline INTEGER NOT NULL, due_millis INTEGER NOT NULL, data TEXT NOT NULL, summary TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_matches_open ON matches_state(open_for_join,strength,id);
+CREATE INDEX IF NOT EXISTS idx_matches_status ON matches_state(status,id);
+CREATE INDEX IF NOT EXISTS idx_matches_due ON matches_state(due_millis,id);
+CREATE TABLE IF NOT EXISTS match_payloads (
+ id TEXT PRIMARY KEY COLLATE BINARY, revision INTEGER NOT NULL, payload BLOB NOT NULL,
+ FOREIGN KEY(id) REFERENCES matches_state(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS player_matches (
+ user_id TEXT PRIMARY KEY, active_user_id TEXT, revision INTEGER NOT NULL, data TEXT NOT NULL, cleanup_after TEXT,
+ FOREIGN KEY(active_user_id) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_matches_deleted ON player_matches(active_user_id,user_id);
+CREATE TABLE IF NOT EXISTS match_config (id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER NOT NULL,board_key TEXT);
+CREATE TABLE IF NOT EXISTS match_maintenance (
+ kind TEXT PRIMARY KEY, revision INTEGER NOT NULL, cutoff_millis INTEGER NOT NULL, after_due INTEGER, after_id TEXT
+);

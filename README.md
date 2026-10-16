@@ -1260,3 +1260,154 @@ and delete6 plus4 DML. Each scope additionally begins/commits a transaction. Que
 continuations on MySQL may use two bounded metadata SELECTs plus one selected
 payload fetch. These are statement counts and scan-plan bounds, not measured
 hosted latency or a maximum-throughput promise.
+
+## Asynchronous matches
+
+`/api/v1/app/matches` implements the ordinary match lifecycle with the project's
+API key and an active Bearer session for the exact `userId`. The14 app paths are:
+
+| Method | Path | Precondition/input |
+|---|---|---|
+| GET | `/matches?userId=UUID` | Bounded player ledger and summaries |
+| GET | `/matches/limits?userId=UUID` | Limits, configuration, capabilities |
+| GET | `/matches/open?userId=UUID&minStrength=-100&maxStrength=100` | Optional `limit`1..50 and original `cursor` |
+| GET | `/matches/UUID?userId=UUID` | Participant state or invited-only lobby metadata |
+| POST | `/matches` | `If-Match` player revision; full create input |
+| POST | `/matches/UUID/join` | `If-Match` match revision; `{userId}` |
+| POST | `/matches/UUID/decline` | Same |
+| POST | `/matches/UUID/start` | Same plus `turnOrder` containing all joined players |
+| POST | `/matches/UUID/turn` | Same plus `dataBase64,finish` |
+| POST | `/matches/UUID/timeout` | Same; advances exactly one overdue turn |
+| POST | `/matches/UUID/leave` | Same; departure/forfeit |
+| POST | `/matches/UUID/cancel` | Same; creator's lobby only |
+| POST | `/matches/UUID/result` | `{userId,finalStateRevision,resultBase64,winnerIds}` |
+| POST | `/matches/UUID/ranked-run` | Explicit501 `FEATURE_NOT_SUPPORTED` |
+
+Create requires exactly
+`{userId,name,capacity,visibility,strength,turnSeconds,timeoutPolicy,ranked,dataBase64,inviteeIds}`.
+Name is nonblank and at most120 UTF-8 bytes; capacity2..8, strength a signed safe
+JSON integer, turnSeconds60..604800, visibility `open|private`, timeoutPolicy
+`skip|forfeit`, at most7 unique other invitees and fewer invitees than capacity.
+Canonical padded Base64 includes the empty string; its decoded bytes are opaque.
+Quoted numeric strings, fractions/exponents, unsafe integers, duplicate decoded
+JSON keys, noncanonical Base64 and extra write fields are rejected. `If-Match`
+is a decimal safe revision, optionally quoted; wildcard/weak headers are invalid.
+
+This PHP edition reports `matches:true,matchesRanked:false,realtime:false`.
+`ranked:true` create and ranked-run return501 before mutation. It does not create
+run tickets, simulate combat or offer an anti-cheat guarantee. The installation
+has no hosted board catalogue; nonnull ranked-board configuration is likewise
+unsupported. Existing ordinary leaderboard submission is a separate feature.
+
+Persist every intended mutation's project/player identity, original input and
+exact revision before HTTP. Send once. After an unknown outcome, inspect the
+original match or player ledger and reconcile; never silently substitute a newer
+revision, create another match or send a new turn. Host/session changes fence
+requests and responses without replacing the unresolved project/player intent.
+Reports are immutable: persist the original final revision, result bytes and
+sorted unique winner IDs. Identical reports replay, changed reports conflict.
+Every participant must report the same bytes and winners for `confirmed`;
+disagreement becomes `disputed`, missing reports become `unconfirmed`. No result
+or timeout grants currency, items, rewards or an inferred winner.
+
+The response envelopes match the hosted ordinary contract, with explicit nulls
+and `serverTime`. Point/actions return `{match,pollAfterSeconds,serverTime}`;
+create also returns `playerRevision`, result also `replayed`. MyMatches returns
+`{userId,revision,active,invites,recent,limits,pollAfterSeconds,serverTime}` and
+search/list returns `{matches,nextCursor,pollAfterSeconds,serverTime}`. Summaries
+contain no bytes, reports or run IDs. `recent` can contain an active match when
+the current player already forfeited. Invited-only lobby viewers and successful
+decline/pre-start leave acknowledgements receive `dataBase64:null,reports:[]`;
+their subsequent point GET returns404. Polling is explicit, with a120-second hint.
+
+One installation is one project. The default self-hosted bounds are10 active
+matches,8192 decoded state bytes,100 retained match references and20 pending
+invitations per player. Deployments embedding `MatchService` can pass lower
+limits; `MatchRules::limits()` defines all five hosted tiers:
+
+| Tier | Active | State bytes | Retained | Pending invites |
+|---|---:|---:|---:|---:|
+| FREE | 2 | 1024 | 20 | 20 |
+| BASIC | 3 | 2048 | 30 | 20 |
+| PLUS | 4 | 3072 | 40 | 20 |
+| PRO | 5 | 4096 | 50 | 20 |
+| ENTERPRISE | 10 | 8192 | 100 | 20 |
+
+Invitations reserve no active/history slot until accepted. Create/join reserve
+both slots atomically. Lower limits block new reservations without deleting
+retained history or active games. Lobbies expire after24 hours; started matches
+have a30-day absolute deadline, reports24 hours and terminal history7 days.
+Reads do not advance timeouts or perform cleanup. Player revision anchors survive
+ordinary leave/cancel and empty histories, preventing uncertain-create ABA.
+
+Operator equivalents reject HTTP before configuration or database access:
+
+```bash
+php bin/matches.php config
+php bin/matches.php configure EXPECTED_CONFIG_REVISION < disabled-ranked.json
+php bin/matches.php limits
+php bin/matches.php list [STATUS|- [LIMIT [CURSOR]]]
+php bin/matches.php get MATCH_UUID
+php bin/matches.php cancel MATCH_UUID EXPECTED_MATCH_REVISION
+php bin/matches.php cleanup
+php bin/matches.php cleanup-scheduled
+php bin/matches.php cleanup-deleted [AFTER_USER_UUID]
+```
+
+Configuration input is `{ "rankedLeaderboardKey": null }`. Schedule cleanup:
+each ordinary sweep examines at most20 due rows with a persistent fixed-cutoff
+`dueAt,UUID` cursor. Full Inbox, contention and failed rows do not prevent later
+rows from being visited. Operator and scheduled sweeps have separate cursors.
+Deleted-user housekeeping handles one indexed nullable-FK player anchor and at
+most20 of its120 bounded references per call; retain its continuation until
+complete. Do not disable foreign keys or erase retained revision anchors manually.
+
+Metadata, summary pages and BLOBs use separate storage. A point read checks the
+payload revision and byte length in one snapshot; list/search never fetch blobs.
+Every mutation joins one explicit connection-bound `SqlTransaction`. MySQL uses
+current row locks plus CAS against the initial snapshot; a failed nested mutation
+rolls back to a savepoint even if its caller catches the error. Public reads own
+their consistent snapshot and reject opaque external MySQL transactions.
+Normal turns/reports compute membership differences before reading player
+ledgers, so unchanged peers cause zero history reads or writes. Open search
+consumes at most256 summary candidates and returns at most50; current bilateral
+blocks and active owners are checked in bounded projections. A filtered empty
+page can carry a continuation. Cursors bind project, actor and strength bounds.
+MySQL continuation splits same-strength/ID and later-strength ranges; SQLite uses
+compound tuple seeks. Neither uses offsets or rereads earlier IDs.
+
+Each new turn freezes an ordinary Inbox intent with its original operation ID,
+revision, recipient and turn deadline. Gameplay commits first; delivery uses a
+separate transaction. A conditional source consume and the Inbox write share
+the exact PDO/scope. A full Inbox retains pending without failing the committed
+turn, later turns supersede old notices and expired notices are never sent. This
+designated source-pending path can survive unrelated receipt eviction. Lost
+delivery acknowledgement cannot create a second entry. Notice bookkeeping does
+not change gameplay revision and never authorizes a grant.
+
+`bash tests/test.sh` exercises all14 actual HTTP paths and local operator access,
+strict wire values, migration, lifecycle/replay/ACL, real independent SQLite
+process races, rollback/lost commit acknowledgement and20+3 fair cleanup with a
+genuinely full Inbox. `tests/matches-seek.py` measures the production SQLite SQL
+through10k equal keys with a slow negative control. SQL tests accept MySQL only
+through explicit loopback `HORIZON_MATCHES_TEST_DSN` naming `task1013_<hex>` and
+`HORIZON_MATCHES_TEST_USER/PASSWORD`, never discovered application credentials.
+The MySQL branch also measures actual10k-row `EXPLAIN ANALYZE` production seeks.
+Actual PHP7.4/MySQL/CI outcomes are recorded separately from local execution.
+
+Measured service statement counts exclude existing HTTP authentication, rate
+limiting and schema/bootstrap. SQLite point GET is3 SELECT/0 DML, open search
+4/0, create with one invite5/4, start including Inbox delivery8/3, an ordinary
+turn including delivery6/4 and immutable report3/1. Writes also begin/commit each
+scope; an Inbox handoff adds its separate scope. PDO transaction-method calls are
+not SQL statement counts. Block checks are bounded by256 candidates with up to8
+participants each, each existing block list by100 IDs. These are bounded
+statement/row envelopes, not latency, maximum capacity or hosted throughput claims.
+The actual MySQL8.4 profiles are point3 SELECT/0 DML, open search4/0, create with
+one invite8/4, start including Inbox10/3, ordinary turn including Inbox8/4 and
+report4/1. Read snapshots additionally set their next transaction's isolation;
+row-lock/current-version checks explain the extra mutation reads. The10k-row
+MySQL seek probes visit256 open candidates or20 due rows; a deliberately
+non-indexable ID negative control, with index-condition pushdown disabled only
+for its measurement, visits9257/9021 rows. Runtime/fixture limits are not changed
+by this diagnostic. Both drivers retain the same hard candidate budgets.
