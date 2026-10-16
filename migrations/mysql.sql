@@ -319,15 +319,18 @@ CREATE TABLE IF NOT EXISTS match_maintenance (
  after_due BIGINT NULL, after_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- Marketplace: indexed metadata plus bounded original item/receipts; no cascading escrow deletion.
+-- Marketplace: indexed metadata plus original item and listing operations; no cascading escrow deletion.
 CREATE TABLE IF NOT EXISTS market_header(id INT PRIMARY KEY,version BIGINT NOT NULL,revision BIGINT NOT NULL,data TEXT NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS market_rules(item_key VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY,data TEXT NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS player_market(user_id CHAR(36) PRIMARY KEY,active_user_id CHAR(36) NULL,revision BIGINT NOT NULL,data MEDIUMTEXT NOT NULL,
  INDEX idx_market_deleted(active_user_id,user_id),FOREIGN KEY(active_user_id) REFERENCES users(id) ON DELETE SET NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS market_listings(id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY,revision BIGINT NOT NULL,
  status VARCHAR(24) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,item_key VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
- price BIGINT NOT NULL,created_millis BIGINT NOT NULL,due_kind INT NOT NULL,due_millis BIGINT NOT NULL,return_owner CHAR(36) NOT NULL,data TEXT NOT NULL,
+ price BIGINT NOT NULL,created_millis BIGINT NOT NULL,due_kind INT NOT NULL,due_millis BIGINT NOT NULL,return_owner CHAR(36) NOT NULL,
+ create_actor CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,create_operation CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,
+ close_actor CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,close_operation CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,data TEXT NOT NULL,
  INDEX idx_market_price(status,price,id),INDEX idx_market_item_price(status,item_key,price,id),INDEX idx_market_admin(created_millis,id),
- INDEX idx_market_admin_status(status,created_millis,id),INDEX idx_market_due(due_kind,due_millis,id),INDEX idx_market_owner(return_owner,id)
+ INDEX idx_market_admin_status(status,created_millis,id),INDEX idx_market_due(due_kind,due_millis,id),INDEX idx_market_owner(return_owner,id),
+ UNIQUE INDEX idx_market_create_operation(create_actor,create_operation),UNIQUE INDEX idx_market_close_operation(close_actor,close_operation)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS market_maintenance(kind VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY,revision BIGINT NOT NULL,data TEXT NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

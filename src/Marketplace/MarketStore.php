@@ -32,21 +32,29 @@ class MarketStore
     { $r=$this->one('SELECT revision,data FROM player_market WHERE user_id=?',[$user],$lock);return $r===null?MarketRules::emptyPlayer():['revision'=>(int)$r['revision'],'exists'=>true]+json_decode($r['data'],true,32,JSON_THROW_ON_ERROR); }
     public function savePlayer(string $user,array $before,array $next): array
     {
+        $next=MarketRules::compactPlayer($next);
         $next['revision']=MarketRules::next($before['revision']);$data=$next;unset($data['revision'],$data['exists']);
         if (!$before['exists']) $this->pdo->prepare('INSERT INTO player_market(user_id,active_user_id,revision,data) VALUES(?,?,?,?)')->execute([$user,$user,$next['revision'],MarketRules::json($data)]);
         else { $q=$this->pdo->prepare('UPDATE player_market SET revision=?,data=? WHERE user_id=? AND revision=?');$q->execute([$next['revision'],MarketRules::json($data),$user,$before['revision']]);if($q->rowCount()!==1)MarketRules::fail('STATE_CONFLICT'); }
         $next['exists']=true;return $next;
     }
     public function get(string $id,bool $lock=false): ?array
-    { $r=$this->one('SELECT data FROM market_listings WHERE id=?',[$id],$lock);if ($r===null) return null;$v=json_decode($r['data'],true,32,JSON_THROW_ON_ERROR);if($v['item']!==null)$v['item']['properties']=(object)$v['item']['properties'];return $v; }
+    { $r=$this->one('SELECT data FROM market_listings WHERE id=?',[$id],$lock);return $r===null?null:$this->decodeListing($r['data']); }
+    private function decodeListing(string $data): array
+    { $v=json_decode($data,true,32,JSON_THROW_ON_ERROR);$v['ops']=$v['ops']??[];if($v['item']!==null)$v['item']['properties']=(object)$v['item']['properties'];return $v; }
+    /** Two indexed point probes cover every action without a JSON scan or personal receipt copy. */
+    public function operation(string $user,string $operation,bool $lock=false): ?array
+    {
+        foreach(['create','close']as$slot){$r=$this->one('SELECT data FROM market_listings'.$this->hint('idx_market_'.$slot.'_operation').' WHERE '.$slot.'_actor=? AND '.$slot.'_operation=? LIMIT 1',[$user,$operation],$lock);if($r!==null)return$this->decodeListing($r['data']);}return null;
+    }
     public function removePlayer(string $user,int $revision): void
     { $q=$this->pdo->prepare('DELETE FROM player_market WHERE user_id=? AND revision=? AND active_user_id IS NULL');$q->execute([$user,$revision]);if($q->rowCount()!==1)MarketRules::fail('STATE_CONFLICT'); }
     private function columns(array $v): array
-    { return [$v['revision'],$v['status'],$v['itemReference']['itemKey'],$v['price'],$v['createdAt'],in_array($v['status'],['sold','returned'],true)?1:0,$v['dueAt'],$v['returnOwnerId'],MarketRules::json($v)]; }
+    { $slots=['create'=>null,'close'=>null];foreach($v['ops']??[]as$op)$slots[$op['k']==='create'?'create':'close']=$op;return [$v['revision'],$v['status'],$v['itemReference']['itemKey'],$v['price'],$v['createdAt'],in_array($v['status'],['sold','returned'],true)?1:0,$v['dueAt'],$v['returnOwnerId'],$slots['create']['u']??null,$slots['create']['o']??null,$slots['close']['u']??null,$slots['close']['o']??null,MarketRules::json($v)]; }
     public function insert(array $v): void
-    { $this->pdo->prepare('INSERT INTO market_listings(id,revision,status,item_key,price,created_millis,due_kind,due_millis,return_owner,data) VALUES(?,?,?,?,?,?,?,?,?,?)')->execute(array_merge([$v['id']],$this->columns($v))); }
+    { $this->pdo->prepare('INSERT INTO market_listings(id,revision,status,item_key,price,created_millis,due_kind,due_millis,return_owner,create_actor,create_operation,close_actor,close_operation,data) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)')->execute(array_merge([$v['id']],$this->columns($v))); }
     public function save(array $before,array $next): void
-    { $q=$this->pdo->prepare('UPDATE market_listings SET revision=?,status=?,item_key=?,price=?,created_millis=?,due_kind=?,due_millis=?,return_owner=?,data=? WHERE id=? AND revision=?');$q->execute(array_merge($this->columns($next),[$before['id'],$before['revision']]));if($q->rowCount()!==1)MarketRules::fail('STATE_CONFLICT'); }
+    { $q=$this->pdo->prepare('UPDATE market_listings SET revision=?,status=?,item_key=?,price=?,created_millis=?,due_kind=?,due_millis=?,return_owner=?,create_actor=?,create_operation=?,close_actor=?,close_operation=?,data=? WHERE id=? AND revision=?');$q->execute(array_merge($this->columns($next),[$before['id'],$before['revision']]));if($q->rowCount()!==1)MarketRules::fail('STATE_CONFLICT'); }
     public function remove(array $v): void { $q=$this->pdo->prepare('DELETE FROM market_listings WHERE id=? AND revision=?');$q->execute([$v['id'],$v['revision']]);if($q->rowCount()!==1)MarketRules::fail('STATE_CONFLICT'); }
     public function many(array $ids): array
     { if(count($ids)>125)throw new LogicException('Market ledger projection bound');$out=[];foreach($ids as$id){$v=$this->get($id);if($v!==null)$out[]=$v;}return$out; }

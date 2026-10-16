@@ -14,7 +14,7 @@ trait MarketReturns
     public function cancel(string $user,string $id,$raw): array
     {
         $user=MarketRules::uuid($user);$id=MarketRules::uuid($id);$r=$this->input($user,'cancel:'.$id,$raw,['expectedListingRevision']);MarketRules::integer($r['expectedListingRevision']);
-        $result=$this->atomic(function()use($user,$id,$r){$this->actors([$user],true);$p=$this->store->player($user,true);$old=MarketRules::receipt($p,$r['operationId'],$r['_hash']);if($old!==null)return$this->envelope($old,true);MarketRules::window($p,$r['_issued'],$this->now());$v=$this->listing($id,true);if($v['sellerId']!==$user)MarketRules::fail('LISTING_NOT_FOUND',404);MarketRules::expected($v['revision'],$r['expectedListingRevision']);if($v['status']!=='active')MarketRules::fail('LISTING_UNAVAILABLE');$next=$this->prepareReturn($v);$receipt=$this->receipt('cancel',$r,$next);$this->store->save($v,$next);$this->store->savePlayer($user,$p,MarketRules::record($p,$receipt,$r['_hash'],$r['_issued'],$this->now(),$this->cap['receiptsPerPlayer']));return$this->envelope($receipt,false);});
+        $result=$this->atomic(function()use($user,$id,$r){$this->actors([$user],true);$p=$this->store->player($user,true);$old=$this->replay($user,$p,$r);if($old!==null)return$old;MarketRules::window(MarketRules::compactPlayer($p),$r['_issued'],$this->now());$v=$this->listing($id,true);if($v['sellerId']!==$user)MarketRules::fail('LISTING_NOT_FOUND',404);MarketRules::expected($v['revision'],$r['expectedListingRevision']);if($v['status']!=='active')MarketRules::fail('LISTING_UNAVAILABLE');$next=$this->recordOperation($this->prepareReturn($v),'cancel',$r);$receipt=$this->receipt($next['ops'][count($next['ops'])-1],$next);$this->store->save($v,$next);$this->store->savePlayer($user,$p,$p);return$this->envelope($receipt,false,$next);});
         return$result;
     }
     public function adminCancel(string $id,int $expected,string $note): array
@@ -79,13 +79,19 @@ trait MarketReturns
     }
     public function cleanupDeleted(?string $after=null): array
     { if($after!==null)MarketRules::uuid($after);$rows=$this->store->deleted($after);$out=[];foreach(array_slice($rows,0,10)as$row)$out[]=$this->cleanupDeletedPlayer($row['user_id']);return['players'=>$out,'nextCursor'=>count($rows)>10?$rows[9]['user_id']:null]; }
+    /** Floors and deletion commit together. Ended identities and already-expired intents need no anchor. */
+    private function retireOperations(array $v): void
+    {
+        $floors=[];foreach($v['ops']??[]as$op)if($op['i']>=$this->now()-MarketRules::RETENTION)$floors[$op['u']]=max($floors[$op['u']]??0,$op['i']);if(!$floors)return;ksort($floors,SORT_STRING);$active=$this->store->users(array_keys($floors),true);
+        foreach($floors as$user=>$floor){if(!in_array($user,$active,true))continue;$p=$this->store->player($user,true);$next=MarketRules::compactPlayer($p);$next['floor']=max($next['floor'],$floor);if(!$p['exists']||$next!==$p)$this->store->savePlayer($user,$p,$next);}
+    }
     public function cleanup(string $namespace='admin'): array
     {
         if(!in_array($namespace,['admin','scheduled'],true))MarketRules::invalid();$rotation=$this->store->maintenance($namespace.':rotation',$this->now());$first=$rotation['first'];$summary=['examined'=>0,'returnsPrepared'=>0,'returnsDelivered'=>0,'terminalRemoved'=>0,'deferred'=>0];
         $unused=0;$firstFull=false;
         for($pass=0;$pass<2||($pass===2&&$firstFull&&$unused>0);$pass++){$kind=$pass===1?1-$first:$first;$budget=$pass===0?10:($pass===1?10+$unused:$unused);$key=$namespace.':'.$kind;$cursor=$this->store->maintenance($key,$this->now());$rows=$this->store->due($kind,$cursor,$budget);if($pass===0)$firstFull=count($rows)===$budget;$unused=0;
             foreach($rows as$row){$summary['examined']++;$id=$row['id'];try{
-                if($kind===1){$removed=$this->atomic(function()use($id){$h=$this->store->header(true);$v=$this->store->get($id,true);if($v===null||!in_array($v['status'],['sold','returned'],true)||$v['terminalAt']+MarketRules::TERMINAL>$this->now())return false;$this->store->remove($v);$next=$h;$next['retainedCount']--;if($next['retainedCount']<0)MarketRules::fail('STATE_CONFLICT');$this->store->saveHeader($h,$next);return true;});if($removed)$summary['terminalRemoved']++;}
+                if($kind===1){$removed=$this->atomic(function()use($id){$h=$this->store->header(true);$v=$this->store->get($id,true);if($v===null||!in_array($v['status'],['sold','returned'],true)||$v['terminalAt']+MarketRules::TERMINAL>$this->now())return false;$this->retireOperations($v);$this->store->remove($v);$next=$h;$next['retainedCount']--;if($next['retainedCount']<0)MarketRules::fail('STATE_CONFLICT');$this->store->saveHeader($h,$next);return true;});if($removed)$summary['terminalRemoved']++;}
                 else{$prepared=$this->atomic(function()use($id){$v=$this->store->get($id,true);if($v===null)return false;if($v['status']==='active'&&$v['expiresAt']<=$this->now()){$next=$this->prepareReturn($v);$this->store->save($v,$next);return true;}return false;});if($prepared)$summary['returnsPrepared']++;$v=$this->store->get($id);if($v!==null&&$v['status']==='return_pending'){$state=$this->deliverReturn($id);if($state==='delivered')$summary['returnsDelivered']++;else$summary['deferred']++;}}
             }catch(Throwable $e){$summary['deferred']++;}
                 // Always advance after a full inbox, race or per-row failure. Persisted cutoff stays fixed.

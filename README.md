@@ -1465,11 +1465,17 @@ with `enabled`, `currencyKey` and integer `feeBps`0..10000. Currency follows the
 grammar, including `chest.gold`, `gold-coin` and `1coin`. The quoted currency/fee remain frozen
 on each listing. Fees use exact integer floor arithmetic;100% fee deliberately credits zero.
 The local installation defaults to Enterprise bounds:25 open escrows/player,10000 retained
-listings,100 operation receipts and history references/player,120 accepted create/buy per
+listings,100 history references/player,120 accepted create/buy per
 project minute and1000ms/player cooldown. `MarketRules::limits()` exposes all five nominal
 profiles; a downgrade never destroys held items. Matching retained originals precede current
-ban/config/rate limits. Receipt eviction raises a permanent timestamp floor; arbitrarily late
-or out-of-order unknown intents can be refused safely.
+ban/config/rate limits. Each listing stores at most two compact operation entries: actor, UUID,
+kind, issued time, SHA256 hex64 intent hash, committed revision and time. The existing receipt
+response is derived from these entries and the listing's immutable item/price/fee fields.
+Player state retains open/history IDs, cooldown, moderation and a permanent timestamp floor.
+The `receiptsPerPlayer` response field remains for SDK compatibility and does not allocate a
+personal receipt ring. Two SQL indexes find actor/UUID operations across all action kinds.
+Unknown intents older than30days or at/below the floor are refused. Retained matches replay
+first, including after their timestamp is below that floor.
 
 A successful buy atomically transfers the unchanged instance ID, original properties and
 creation time, debits the full buyer price and credits the strict seller net under current
@@ -1489,11 +1495,18 @@ Run `cleanup-scheduled` every30minutes in the host scheduler and `cleanup-delete
 for bounded identity cleanup. Each scheduled/admin cursor is durable and independent, examines
 at most20 indexed rows, alternates return/terminal priority and advances past full Inbox or
 failed rows. Valuable nonterminal escrow is never TTL-deleted. Terminal audits last7days.
+Before physically deleting a terminal listing, the same transaction raises each existing operation
+actor's permanent floor through its issued time while the intent is within30days.
+Deleted identities and already-expired intents need no new personal state.
+A later retry of an old create cannot reopen escrow after that source is gone. Existing old
+personal receipts remain a read-only replay fallback until the next committed player write.
+That write removes all old receipts and raises the floor through every old issued time. Startup
+migration adds nullable SQL index projections without scanning or copying old receipt/escrow JSON.
 Search returns at most50 offers from at most256 indexed candidates, including explicit empty
 continuation pages; callers advance pages explicitly. No automatic polling or sale fanout.
 
 Local SQL command profiles (excluding HTTP auth/bootstrap) are measured separately from Mongo
-profiles and capacity: initial create9 SELECT/4 DML and buy14 SELECT/7 DML in the functional
+profiles and capacity: initial create10 SELECT/4 DML and buy15 SELECT/7 DML in the functional
 fixture. `tests/marketplace.php` prints the measured counts. Sparse database/index allocation
 is not a per-player capacity guarantee. Run `bash tests/test.sh`; dedicated tests also support
 an explicit loopback `HORIZON_MARKET_TEST_DSN` whose database must match `task1015_<hex>`.
