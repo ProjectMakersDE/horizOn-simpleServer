@@ -266,3 +266,11 @@ CREATE TABLE IF NOT EXISTS group_pending_references (
     FOREIGN KEY(group_id) REFERENCES groups_state(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_group_pending_group ON group_pending_references(group_id,user_id);
+
+-- One project catalog header; indexed templates and one bounded inventory per player.
+CREATE TABLE IF NOT EXISTS item_catalog (id INTEGER PRIMARY KEY, revision INTEGER NOT NULL, total INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS item_templates (item_key TEXT PRIMARY KEY COLLATE BINARY, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS player_items (
+    user_id TEXT PRIMARY KEY, revision INTEGER NOT NULL, data TEXT NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);

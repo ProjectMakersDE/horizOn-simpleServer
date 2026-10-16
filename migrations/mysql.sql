@@ -262,3 +262,11 @@ CREATE TABLE IF NOT EXISTS group_pending_references (
     user_id CHAR(36) NOT NULL, group_id CHAR(36) NOT NULL, PRIMARY KEY(user_id,group_id),
     INDEX idx_group_pending_group(group_id,user_id), FOREIGN KEY(group_id) REFERENCES groups_state(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Reserved catalog identities, bounded pages and same-PDO inventory grants.
+CREATE TABLE IF NOT EXISTS item_catalog (id INT PRIMARY KEY, revision BIGINT NOT NULL, total INT NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS item_templates (item_key VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY, data TEXT NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS player_items (
+    user_id CHAR(36) PRIMARY KEY, revision BIGINT NOT NULL, data MEDIUMTEXT NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

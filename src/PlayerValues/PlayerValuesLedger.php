@@ -110,8 +110,9 @@ class PlayerValuesLedger
                 'purchasesPerDay' => isset($offer['purchasesPerDay']) ? self::integer($offer['purchasesPerDay'], 1, 1000000) : null,
             ];
             foreach (['costs', 'rewards'] as $side) {
-                $entries = self::list($offer[$side] ?? null, 8);
-                if (!$entries) self::fail('INVALID_REQUEST', 'Offers need costs and rewards', 400);
+                $entries = self::list(self::field($offer, $side, $side === 'rewards' ? [] : null), 8);
+                if (!$entries && $side === 'costs') self::fail('INVALID_REQUEST', 'Offers need positive costs', 400);
+                $normalized[$side] = [];
                 $seen = [];
                 foreach ($entries as $entry) {
                     if (!is_array($entry)) self::fail('INVALID_REQUEST', 'Invalid offer value', 400);
@@ -121,9 +122,26 @@ class PlayerValuesLedger
                     $normalized[$side][] = ['key' => $valueKey, 'amount' => self::integer($entry['amount'] ?? null, 1)];
                 }
             }
+            $normalized['itemRewards'] = self::itemRewards(self::field($offer, 'itemRewards', []));
+            if (!$normalized['rewards'] && !$normalized['itemRewards']) self::fail('INVALID_REQUEST', 'Offers need value or item rewards', 400);
             $offers[$key] = $normalized;
         }
         return ['definitions' => array_values($definitions), 'offers' => array_values($offers)];
+    }
+
+    /** Additive item rewards; absent on legacy offers. */
+    public static function itemRewards($items): array
+    {
+        $items = self::list($items, 4); $seen = []; $total = 0; $result = [];
+        foreach ($items as $item) {
+            if (!is_array($item) || array_diff(array_keys($item), ['itemKey', 'quantity'])) self::fail('INVALID_REQUEST', 'Invalid item reward', 400);
+            $key = $item['itemKey'] ?? null;
+            if (!is_string($key) || !preg_match('/^[a-z][a-z0-9_]{0,63}$/D', $key) || isset($seen[$key])) self::fail('INVALID_REQUEST', 'Invalid or duplicate item key', 400);
+            $quantity = self::integer($item['quantity'] ?? null, 1, 4); $total += $quantity; $seen[$key] = true;
+            $result[] = ['itemKey' => $key, 'quantity' => $quantity];
+        }
+        if ($total > 4) self::fail('INVALID_REQUEST', 'At most four item instances per purchase', 400);
+        return $result;
     }
 
     public static function emptyState(): array

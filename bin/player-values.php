@@ -6,6 +6,7 @@ if (PHP_SAPI !== 'cli') { http_response_code(403); exit; }
 require_once __DIR__ . '/../src/Core/Config.php';
 require_once __DIR__ . '/../src/Core/Database.php';
 require_once __DIR__ . '/../src/PlayerValues/PlayerValuesService.php';
+require_once __DIR__ . '/../src/Items/ItemJson.php';
 
 try {
     $command = $argv[1] ?? '';
@@ -20,6 +21,16 @@ try {
     if (in_array($command, ['configure', 'correct'], true)) {
         $raw = stream_get_contents(STDIN, 1048577);
         if (strlen($raw) > 1048576) PlayerValuesLedger::fail('INVALID_REQUEST', 'Input exceeds 1 MiB', 400);
+        if ($command === 'configure') {
+            // Preserve JSON array/object identity before legacy associative normalization.
+            $configObject = ItemJson::decode($raw, 1048576);
+            foreach (['definitions', 'offers'] as $field) if (property_exists($configObject, $field) && !is_array($configObject->{$field})) ItemRules::invalid();
+            foreach ($configObject->offers ?? [] as $offer) {
+                if (!$offer instanceof stdClass) ItemRules::invalid();
+                foreach (['costs', 'rewards', 'itemRewards'] as $field)
+                    if (property_exists($offer, $field) && !is_array($offer->{$field})) ItemRules::invalid();
+            }
+        }
         $input = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
         if (!is_array($input)) PlayerValuesLedger::fail('INVALID_REQUEST', 'A JSON object is required', 400);
     }
