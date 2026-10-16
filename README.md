@@ -84,6 +84,8 @@ This table compares the self-hosted Simple Server with the fully managed [horizO
 | Membership, roles, private data and Inbox notifications (session bound) | :white_check_mark: | :white_check_mark: |
 | Inspection and deleted-user cleanup | local operator CLI | scoped dashboard / Account Key |
 | Realtime invalidation | :x: | :white_check_mark: |
+| **Chat** | | |
+| Direct/group/project messages, realtime sync and moderation | :x: (HTTP 501 `NOT_SUPPORTED`, no polling fallback) | :white_check_mark: |
 | **Items** | | |
 | Catalog pages, unique inventory, rule-bound properties and atomic paid grants | :white_check_mark: | :white_check_mark: |
 | Catalog administration / inventory inspection | local operator CLI | scoped dashboard / Account Key |
@@ -1411,3 +1413,30 @@ MySQL seek probes visit256 open candidates or20 due rows; a deliberately
 non-indexable ID negative control, with index-condition pushdown disabled only
 for its measurement, visits9257/9021 rows. Runtime/fixture limits are not changed
 by this diagnostic. Both drivers retain the same hard candidate budgets.
+
+
+## Chat is hosted-only (TASK-1014)
+
+All six Chat app routes explicitly return HTTP 501 `NOT_SUPPORTED` after the usual
+project API-key/rate checks and a matching active player Bearer session:
+`GET /chat/limits`, `POST /chat/channels/open`, `POST /chat/channels/{id}/sync`,
+`POST /chat/channels/{id}/messages`, `GET /chat/operations/{operationId}` and
+`POST /chat/channels/{id}/messages/{messageId}/report` under `/api/v1/app`.
+Missing or foreign player sessions still return 401 `SESSION_REQUIRED` or 403
+`SESSION_FORBIDDEN`. An Account Key cannot replace the app key/player session.
+
+The twelve hosted `/api/v1/admin/features/chat/{apiKeyId}` routes return the same
+constant 501 refusal, including without credentials: they disclose no project,
+channel, message or moderation state and perform no Chat operation. This edition
+has no Account-Key moderation implementation. `php bin/chat.php` likewise writes
+`NOT_SUPPORTED`/status 501 to stderr and exits 1 without loading configuration or
+opening a database. Direct HTTP access to the CLI file is 403 with an empty body.
+
+No chat tables, retained text, send/report receipts, moderation, subscriptions,
+background tasks or polling fallback are provided. In particular `/chat/limits`
+does not fabricate a supported capability envelope. Existing authenticated REST
+features continue normally. The unsupported controller adds only one normal
+player-session lookup for app requests and no feature SQL for either family;
+existing bootstrap/migrations/API-key/rate middleware remain additional.
+`bash tests/test.sh` includes the real six-route/auth/foreign-user and twelve-route
+operator refusal checks on the suite-owned temporary SQLite installation.
