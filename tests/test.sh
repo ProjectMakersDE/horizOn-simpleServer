@@ -1081,6 +1081,11 @@ if php tests/groups-http.php "$BASE_URL" "$API_KEY" "$USER_ID" "$SESSION_TOKEN";
 if php tests/groups.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 if php tests/groups-migration.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
+# ---- Items: exact JSON/canonical bytes, paid grants and SQLite/independent-process races ----
+if php tests/items-http.php "$BASE_URL" "$API_KEY" "$USER_ID" "$SESSION_TOKEN"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/items.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/items-migration.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
 # Exercise direct existing-file dispatch, which Apache/CGI can bypass the index router for.
 # Reuse the suite's owned listener after its API checks instead of touching another port/process.
 kill "$PHP_PID"
@@ -1122,6 +1127,11 @@ GR_CLI_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TEST_
 assert_status 'Groups operator rejects direct HTTP before bootstrap' 403 "$GR_CLI_STATUS"
 GR_CLI_BODY=$(curl -s "http://localhost:${TEST_PORT}/bin/groups.php")
 if [ -z "$GR_CLI_BODY" ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); echo 'FAIL: Groups operator exposed data'; fi
+
+IT_CLI_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TEST_PORT}/bin/items.php")
+assert_status 'Items operator rejects direct HTTP before bootstrap' 403 "$IT_CLI_STATUS"
+IT_CLI_BODY=$(curl -s "http://localhost:${TEST_PORT}/bin/items.php")
+if [ -z "$IT_CLI_BODY" ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); echo 'FAIL: Items operator exposed data'; fi
 
 # ---- Summary ----
 echo ""

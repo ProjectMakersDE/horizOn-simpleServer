@@ -26,6 +26,7 @@ Built for indie game developers and small studios who want full control over the
 - Explicit atomic player-statistics batches: sum/max/min/last, UTC resets and safe original-ID retries
 - Friends: bilateral requests, explicit revisions, blocklists and atomic Inbox notifications
 - Groups: open/request/invite membership, leader/officer/member roles, private object data and bounded member pages
+- Items: indexed catalog, unique inventory instances, rule-bound properties, equip/discard and atomic paid item grants
 - User feedback collection
 - User log ingestion (INFO, WARN, ERROR)
 - Crash reporting with automatic grouping, fingerprinting, and regression detection
@@ -82,6 +83,9 @@ This table compares the self-hosted Simple Server with the fully managed [horizO
 | Membership, roles, private data and Inbox notifications (session bound) | :white_check_mark: | :white_check_mark: |
 | Inspection and deleted-user cleanup | local operator CLI | scoped dashboard / Account Key |
 | Realtime invalidation | :x: | :white_check_mark: |
+| **Items** | | |
+| Catalog pages, unique inventory, rule-bound properties and atomic paid grants | :white_check_mark: | :white_check_mark: |
+| Catalog administration / inventory inspection | local operator CLI | scoped dashboard / Account Key |
 | **User Feedback** | | |
 | Feedback submission | :white_check_mark: | :white_check_mark: |
 | **User Logs** | | |
@@ -986,3 +990,104 @@ The probe records SQL text; MySQL PDO transaction-method calls are outside its
 BEGIN/COMMIT SQL counters. Member pages select at most51 rows to derive an explicit continuation;
 player snapshots batch only their bounded group IDs. These are SQL request costs,
 not measured hosted latency or a maximum-throughput guarantee.
+
+
+## Items (self-hosted REST)
+
+Items are unique server-owned instances, such as a sword with durability. Stackable
+quantities remain Player Values, and display-only avatars/frames/badges remain
+Player Profile. All five routes require the installation API key and the matching
+player Bearer session:
+
+| Method | Route | Input |
+|---|---|---|
+| GET | `/api/v1/app/items` | `userId` |
+| GET | `/api/v1/app/items/catalog` | `userId`, optional `limit`1..50, `afterKey`, `catalogRevision` |
+| POST | `/api/v1/app/items/adjust` | `userId,instanceId,expectedRevision,changes:[{key,amount}]` |
+| POST | `/api/v1/app/items/equip` | `userId,instanceId,expectedRevision,equipped` |
+| POST | `/api/v1/app/items/discard` | `userId,instanceId,expectedRevision` |
+
+Inventory responses contain `userId,revision,instances,limits,serverTime`. Each
+instance contains `instanceId,itemKey,properties,equipped,createdAt`. Mutations
+replace the complete current snapshot. Keep the exact reviewed revision and item
+ID; after an uncertain result, read and reconcile rather than automatically
+substituting a new revision. Discard explicitly removes that unique instance.
+GET does not create an empty inventory. Physical player deletion cascades its
+inventory; same-PDO user locks and exact inventory CAS prevent orphan recreation.
+
+Catalog pages contain `revision,definitions,nextAfterKey,total,limits,serverTime`.
+Continue explicitly with the original catalog revision; a changed revision returns
+409 instead of mixing pages. Inactive templates remain readable. Existing keys
+stay reserved forever, including archived ones. Updating/reactivating an existing
+key is permitted after downgrade, while over-cap additions fail. No pagination
+loop, polling, realtime or public grant/admin endpoint is added.
+
+Local operator commands reject HTTP before bootstrap:
+
+```bash
+php bin/items.php catalog [AFTER_KEY] [CATALOG_REVISION]
+php bin/items.php put sword EXPECTED_REVISION < sword.json
+php bin/items.php player PLAYER_UUID
+php bin/items.php limits
+```
+
+A complete template body (excluding its key) is:
+
+```json
+{"name":"Sword","type":"weapon","rarity":"common","active":true,"baseProperties":{"durability":80},"propertyRules":[{"key":"durability","min":0,"max":100,"maxChangePerCall":5}]}
+```
+
+Keys/type/rarity/property names follow `[a-z][a-z0-9_]{0,63}`. Names occupy1..120
+UTF-8 bytes. Properties are a flat JSON object with at most16 keys, safe integers,
+booleans or strings, at most256 canonical UTF-8 bytes. Numbers cannot be quoted,
+fractional/exponential or outside±9007199254740991. Duplicate decoded JSON keys,
+invalid Unicode, null and nested property values are rejected. Canonical JSON
+sorts ASCII object keys, writes exact base-ten integers and literal Unicode/slash,
+uses short control escapes and lowercase\u00xx for remaining controls. The complete
+canonical template occupies at most2048 bytes. The256-byte property limit is
+checked after every delta, including digit growth. Item commands accept at most
+64KiB of request text; the existing PV operator catalog keeps its1MiB bound.
+
+At most16 unique rules name existing numeric base properties with safe integer
+min/max and positive maxChangePerCall. One call changes at most8 distinct nonzero
+numeric deltas. Current bounds apply to the exact result; a new template property
+never silently appears on an old instance. Archived templates prevent new grants
+and property changes, while equip/unequip/discard remain available.
+
+One installation is one project. Fixed self-hosted bounds are5000 lifetime catalog
+keys,150 inventory instances and50 retained grant receipts. Stored items and keys
+survive lower service limits; only additions are refused. This is not a shared
+hosted-cluster capacity or throughput claim.
+
+A Player Values offer gains `itemRewards:[{itemKey,quantity}]`, absent meaning `[]`.
+Costs stay positive; at least one value reward or item reward is required. Unique
+item keys have quantity1..4 and total at most4. Purchase uses its original
+`unixMillis:UUID` operation ID. Debit, daily counters, the value receipt and item
+grant share one explicit `SqlTransaction` and PDO; full/invalid inventory rolls
+everything back. Value-only offers issue no item SQL. The purchase operation gains
+original `items:[{instanceId,itemKey}]`, default `[]` for old receipts. Replay checks
+that retained PV receipt before current offers/catalog and never recreates an
+already discarded item. Explicitly refresh inventory after confirmed purchase.
+
+The server-only ItemService grant provider hashes original source, timestamp and
+key/quantity intent, not mutable template properties. Retained receipts precede
+catalog/cap/age checks. New unknown operations older than30 days, at/below the
+permanent eviction floor or more than30 seconds ahead are refused. Retention
+stores bounded references rather than full snapshots. No client chooses a new
+instance UUID or its initial properties.
+
+`bash tests/test.sh` includes all five real HTTP routes, actual local CLI calls,
+strict JSON/session/revision checks, SQLite process races/rollback/replay and a
+real legacy bootstrap. `php tests/items.php` and `php tests/items-migration.php`
+accept MySQL only via explicit loopback `HORIZON_ITEMS_TEST_DSN` with a
+`task1011_<hex>` database and `HORIZON_ITEMS_TEST_USER/PASSWORD`. They never discover
+application credentials or a default host database. Isolated MySQL/PHP7.4 evidence
+is recorded separately from local PHP and CI.
+
+Service SQL counts exclude authentication and bootstrap. Inventory GET uses2
+SELECTs; a catalog page uses4 around at most51 indexed templates. Adjust uses3
+SELECTs plus1 inventory CAS, equip/discard2 plus1 CAS. A one-template paid item
+purchase uses7 SELECTs and2 DML statements inside one transaction. Direct grant
+uses2 plus at most4 template reads and1 inventory CAS. SQLite adds BEGIN/COMMIT;
+MySQL PDO transaction-method calls are outside the SQL-text counters. These are
+statement counts, not hosted latency or measured maximum capacity.

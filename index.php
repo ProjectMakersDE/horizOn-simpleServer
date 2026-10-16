@@ -48,6 +48,7 @@ require_once $baseDir . '/src/Inbox/InboxController.php';
 require_once $baseDir . '/src/Achievements/AchievementController.php';
 require_once $baseDir . '/src/Friends/FriendsController.php';
 require_once $baseDir . '/src/Groups/GroupController.php';
+require_once $baseDir . '/src/Items/ItemController.php';
 require_once $baseDir . '/src/UserFeedback/UserFeedbackController.php';
 require_once $baseDir . '/src/UserLogs/UserLogsController.php';
 require_once $baseDir . '/src/CrashReporting/CrashReportingController.php';
@@ -117,6 +118,13 @@ $router->get($prefix . '/groups/{groupId}/pending', [GroupController::class, 'pe
 foreach (GroupRules::ACTIONS as $groupAction) {
     $router->post($prefix . '/groups/{groupId}/' . $groupAction, static function (Request $req) use ($groupAction) { GroupController::change($req,$groupAction); });
 }
+
+// --- Items: explicit inventory CAS, paged catalog and no public grant/admin route ---
+$router->get($prefix . '/items', [ItemController::class, 'get']);
+$router->get($prefix . '/items/catalog', [ItemController::class, 'catalog']);
+$router->post($prefix . '/items/adjust', [ItemController::class, 'adjust']);
+$router->post($prefix . '/items/equip', [ItemController::class, 'equip']);
+$router->post($prefix . '/items/discard', [ItemController::class, 'discard']);
 
 // --- User Management ---
 $router->post($prefix . '/user-management/signup', [UserManagementController::class, 'signup']);

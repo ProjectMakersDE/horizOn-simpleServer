@@ -96,6 +96,9 @@ class Request
         return $this->body[$key] ?? $default;
     }
 
+    public function rawBody(): string { return $this->rawBody; }
+    public function hasQuery(string $key): bool { return array_key_exists($key, $this->query); }
+
     /** A feature may need JSON object identity: {} must not turn into [] through associative decode. */
     public function objectBody(string $key)
     {
