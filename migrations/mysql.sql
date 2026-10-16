@@ -246,3 +246,19 @@ CREATE TABLE IF NOT EXISTS friends_references (
     INDEX idx_friends_related(related_user_id,owner_user_id),
     FOREIGN KEY(owner_user_id) REFERENCES friends_state(user_id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Explicit connection-bound groups; player state is a permanent revision/deletion anchor.
+CREATE TABLE IF NOT EXISTS groups_state (id CHAR(36) PRIMARY KEY, revision BIGINT NOT NULL, data MEDIUMTEXT NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS player_groups (
+    user_id CHAR(36) PRIMARY KEY, active_user_id CHAR(36) NULL, revision BIGINT NOT NULL, data TEXT NOT NULL,
+    INDEX idx_groups_deleted(active_user_id,user_id), FOREIGN KEY(active_user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS group_members (
+    group_id CHAR(36) NOT NULL, user_id CHAR(36) NOT NULL, role VARCHAR(7) NOT NULL, joined_millis BIGINT NOT NULL,
+    PRIMARY KEY(group_id,user_id), INDEX idx_group_members_player(user_id,group_id), INDEX idx_group_succession(group_id,role,joined_millis,user_id),
+    FOREIGN KEY(group_id) REFERENCES groups_state(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS group_pending_references (
+    user_id CHAR(36) NOT NULL, group_id CHAR(36) NOT NULL, PRIMARY KEY(user_id,group_id),
+    INDEX idx_group_pending_group(group_id,user_id), FOREIGN KEY(group_id) REFERENCES groups_state(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

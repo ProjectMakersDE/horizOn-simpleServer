@@ -247,3 +247,22 @@ CREATE TABLE IF NOT EXISTS friends_references (
     FOREIGN KEY(owner_user_id) REFERENCES friends_state(user_id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_friends_related ON friends_references(related_user_id,owner_user_id);
+
+-- Groups retain player revisions and indexed deletion anchors after ordinary leave/delete.
+CREATE TABLE IF NOT EXISTS groups_state (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS player_groups (
+    user_id TEXT PRIMARY KEY, active_user_id TEXT, revision INTEGER NOT NULL, data TEXT NOT NULL,
+    FOREIGN KEY(active_user_id) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_groups_deleted ON player_groups(active_user_id,user_id);
+CREATE TABLE IF NOT EXISTS group_members (
+    group_id TEXT NOT NULL, user_id TEXT NOT NULL, role TEXT NOT NULL, joined_millis INTEGER NOT NULL,
+    PRIMARY KEY(group_id,user_id), FOREIGN KEY(group_id) REFERENCES groups_state(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_group_members_player ON group_members(user_id,group_id);
+CREATE INDEX IF NOT EXISTS idx_group_succession ON group_members(group_id,role,joined_millis,user_id);
+CREATE TABLE IF NOT EXISTS group_pending_references (
+    user_id TEXT NOT NULL, group_id TEXT NOT NULL, PRIMARY KEY(user_id,group_id),
+    FOREIGN KEY(group_id) REFERENCES groups_state(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_group_pending_group ON group_pending_references(group_id,user_id);
