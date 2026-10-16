@@ -47,6 +47,7 @@ require_once $baseDir . '/src/Statistics/StatisticsController.php';
 require_once $baseDir . '/src/Inbox/InboxController.php';
 require_once $baseDir . '/src/Achievements/AchievementController.php';
 require_once $baseDir . '/src/Friends/FriendsController.php';
+require_once $baseDir . '/src/Groups/GroupController.php';
 require_once $baseDir . '/src/UserFeedback/UserFeedbackController.php';
 require_once $baseDir . '/src/UserLogs/UserLogsController.php';
 require_once $baseDir . '/src/CrashReporting/CrashReportingController.php';
@@ -104,6 +105,17 @@ $router->get($prefix . '/friends', [FriendsController::class, 'get']);
 $router->get($prefix . '/friends/find', [FriendsController::class, 'find']);
 foreach (FriendsRules::ACTIONS as $friendsAction) {
     $router->post($prefix . '/friends/' . $friendsAction, static function (Request $req) use ($friendsAction) { FriendsController::change($req, $friendsAction); });
+}
+
+// --- Groups: explicit revisions, guarded membership and same-PDO Inbox transactions ---
+$router->get($prefix . '/groups', [GroupController::class, 'get']);
+$router->post($prefix . '/groups', [GroupController::class, 'create']);
+$router->get($prefix . '/groups/{groupId}', [GroupController::class, 'detail']);
+$router->put($prefix . '/groups/{groupId}', [GroupController::class, 'update']);
+$router->get($prefix . '/groups/{groupId}/members', [GroupController::class, 'members']);
+$router->get($prefix . '/groups/{groupId}/pending', [GroupController::class, 'pending']);
+foreach (GroupRules::ACTIONS as $groupAction) {
+    $router->post($prefix . '/groups/{groupId}/' . $groupAction, static function (Request $req) use ($groupAction) { GroupController::change($req,$groupAction); });
 }
 
 // --- User Management ---

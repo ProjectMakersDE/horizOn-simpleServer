@@ -9,6 +9,7 @@ class Request
     private array $query;
     private array $headers;
     private ?array $body;
+    private string $rawBody = '';
     private array $params = [];
 
     public function __construct()
@@ -47,6 +48,7 @@ class Request
         // Parse JSON body
         $this->body = null;
         $rawBody = file_get_contents('php://input');
+        $this->rawBody = $rawBody === false ? '' : $rawBody;
         if ($rawBody !== '' && $rawBody !== false) {
             $decoded = json_decode($rawBody, true);
             if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
@@ -92,6 +94,13 @@ class Request
             return $this->body;
         }
         return $this->body[$key] ?? $default;
+    }
+
+    /** A feature may need JSON object identity: {} must not turn into [] through associative decode. */
+    public function objectBody(string $key)
+    {
+        $root = json_decode($this->rawBody);
+        return $root instanceof stdClass && property_exists($root, $key) ? $root->{$key} : null;
     }
 
     public function param(string $key): ?string

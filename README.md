@@ -25,6 +25,7 @@ Built for indie game developers and small studios who want full control over the
 - Player profile: avatar, frame and up to 3 badges from a cosmetics catalog, shown in leaderboard entries
 - Explicit atomic player-statistics batches: sum/max/min/last, UTC resets and safe original-ID retries
 - Friends: bilateral requests, explicit revisions, blocklists and atomic Inbox notifications
+- Groups: open/request/invite membership, leader/officer/member roles, private object data and bounded member pages
 - User feedback collection
 - User log ingestion (INFO, WARN, ERROR)
 - Crash reporting with automatic grouping, fingerprinting, and regression detection
@@ -76,6 +77,10 @@ This table compares the self-hosted Simple Server with the fully managed [horizO
 | **Friends** | | |
 | Requests, friends, blocks and Inbox notifications (session bound) | :white_check_mark: | :white_check_mark: |
 | Relationship inspection | local operator CLI | scoped dashboard / Account Key |
+| Realtime invalidation | :x: | :white_check_mark: |
+| **Groups** | | |
+| Membership, roles, private data and Inbox notifications (session bound) | :white_check_mark: | :white_check_mark: |
+| Inspection and deleted-user cleanup | local operator CLI | scoped dashboard / Account Key |
 | Realtime invalidation | :x: | :white_check_mark: |
 | **User Feedback** | | |
 | Feedback submission | :white_check_mark: | :white_check_mark: |
@@ -900,3 +905,84 @@ Inbox. Existing/missing peers and empty reference sets can reduce the write coun
 The visible-profile fanout stays one selected bulk query for at most240 peers;
 reverse references are at most340 per player. These are service statement counts,
 not hosted Signup-relative latency or capacity measurements.
+
+
+## Groups (self-hosted REST)
+
+The20 player endpoints match the hosted Groups contract. All require the API key
+and the exact `userId` owner’s Bearer session:
+
+| Method | Relative endpoint | Purpose |
+|---|---|---|
+| GET | `/groups?userId=...` | Own memberships and pending invitations/requests |
+| POST | `/groups` | Create with explicit `expectedPlayerRevision`; fresh server-generated UUID |
+| GET | `/groups/{groupId}?userId=...` | Public metadata; private data/role only for members |
+| PUT | `/groups/{groupId}` | Replace metadata with explicit `expectedRevision` |
+| GET | `/groups/{groupId}/members?userId=...&limit=50&afterUserId=...` | Member-only UUID keyset page, at most50 |
+| GET | `/groups/{groupId}/pending?userId=...` | Officer/leader view of current pending decisions |
+| POST | `/groups/{groupId}/{join,request,invite,accept-invite,decline-invite,cancel-invite,accept-request,decline-request,cancel-request,leave,remove,role,transfer,delete}` | Explicit membership/role action |
+
+Mutation bodies carry `userId` and a nonnegative safe-integer revision. Targeted
+actions also carry `targetUserId`; decisions carry the original `requestId` UUID.
+Roles are `leader`, `officer`, `member`; join modes are `open`, `request`, `invite`.
+A name is at most120UTF-8 bytes, description1024 and `data` is an object whose
+serialized JSON is at most2048UTF-8 bytes. Empty objects and arrays remain distinct;
+arbitrary object keys survive storage. Officers may update metadata and invite or
+remove ordinary members; only the leader may assign roles or transfer leadership.
+A nonsole leader must transfer before leaving. Group creation cannot accept a
+client-chosen ID. A timeout requires reading current state and an explicit new
+decision; never automatically substitute a revision or repeat a creation.
+
+The standalone limits are500 members and5 memberships per player, with at most20
+incoming invitations and20 outgoing requests per player, and20 of each pending
+kind per group. These maxima are separate from hosted tariff limits. Above-limit
+existing memberships can still leave or be removed. Acceptance rechecks both
+membership limits, exact invitation identity, original issuer and the shared
+Friends block policy. Changed player/group revisions, membership rows, reverse
+pending references and ordinary30-day Inbox notices commit atomically using one
+PDO and its explicit `SqlTransaction`; a full Inbox or a CAS conflict rolls back
+the entire action. MySQL mutations compare the established snapshot revisions to
+narrow current locks before changing them; stale outer snapshots fail with409.
+No automatic retry, realtime transport, chat or group currency is provided here.
+
+Operator access is local CLI only, rejected over HTTP before database bootstrap:
+
+```bash
+php bin/groups.php player PLAYER_UUID
+php bin/groups.php group GROUP_UUID
+php bin/groups.php members GROUP_UUID [AFTER_USER_UUID]
+php bin/groups.php pending GROUP_UUID
+php bin/groups.php limits
+php bin/groups.php cleanup-deleted [AFTER_USER_UUID]
+```
+
+Physical user deletion retains an indexed nullable-FK player anchor. Cleanup handles
+at most10 deleted anchors and10 related groups per anchor per invocation; each
+group contains at most40 pending entries. It finds historical invitations through
+a reverse index including original issuers, rather than scanning lifetime history.
+Follow `nextAfterUserId` until null, then start another sweep if incomplete results
+remain. This cursor prevents early blocked leader successions from starving later
+deleted successors. The oldest remaining officer, otherwise oldest member, becomes
+leader (joined timestamp and UUID tie-break). A deleted successor stays pending
+until that player’s own cleanup removes it. Restore rebinds the nullable FK only;
+normal leave/delete preserves the player revision, so uncertain old creates cannot
+rebook. Never bypass these fences by disabling foreign keys or deleting state rows.
+
+`bash tests/test.sh` covers all20 authenticated HTTP routes, CLI isolation, SQLite
+races/rollback/uncertain commits and the legacy-schema bootstrap. The SQL probe
+`php tests/groups.php` accepts MySQL only through an explicit loopback
+`HORIZON_GROUPS_TEST_DSN` naming `task1010_<hex>`, plus
+`HORIZON_GROUPS_TEST_USER` and `HORIZON_GROUPS_TEST_PASSWORD`; no application
+credentials or host-default database are discovered. `php tests/groups-migration.php`
+checks an actual pre-feature schema. Real MySQL and PHP7.4 results are recorded
+separately after isolated probes.
+
+Service SQL statement counts exclude HTTP authentication and bootstrap. On SQLite,
+an empty snapshot uses3 SELECTs, a populated snapshot4, public detail3 and a
+50-member page5; an open join uses9 SELECTs plus4 bounded DML statements. Each
+scope additionally uses BEGIN/COMMIT. MySQL uses the same3/4/3/5 read counts
+and11 SELECTs plus4 DML for an open join, including its current-revision locks.
+The probe records SQL text; MySQL PDO transaction-method calls are outside its
+BEGIN/COMMIT SQL counters. Member pages select at most51 rows to derive an explicit continuation;
+player snapshots batch only their bounded group IDs. These are SQL request costs,
+not measured hosted latency or a maximum-throughput guarantee.
