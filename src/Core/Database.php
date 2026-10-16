@@ -58,6 +58,7 @@ class Database
         self::ensureInboxConfig($pdo);
         self::ensureGiftCodeValues($pdo);
         self::ensureAchievementsConfig($pdo);
+        self::ensureMarketOperations($pdo);
         // Millisecond registration cutoff prevents a post-publication signup in the same second qualifying.
         self::ensureUserActivityColumns($pdo);
 
@@ -113,6 +114,18 @@ class Database
     }
 
     public static function nowMillis(): int { return (int)floor(microtime(true) * 1000); }
+
+    /** Add indexed listing projections only. Legacy listing/player JSON is not scanned or rewritten. */
+    public static function ensureMarketOperations(PDO $pdo): void
+    {
+        $driver=$pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        $columns=$driver==='mysql'
+            ?$pdo->query("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='market_listings'")->fetchAll(PDO::FETCH_COLUMN)
+            :array_column($pdo->query('PRAGMA table_info(market_listings)')->fetchAll(),'name');
+        foreach(['create_actor','create_operation','close_actor','close_operation']as$column)if(!in_array($column,$columns,true))
+            $pdo->exec('ALTER TABLE market_listings ADD COLUMN '.$column.($driver==='mysql'?' CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL':' TEXT COLLATE BINARY'));
+        foreach(['create','close']as$slot)self::createIndexIfNotExists($pdo,$driver,'idx_market_'.$slot.'_operation','market_listings',$slot.'_actor,'.$slot.'_operation',true,true);
+    }
 
     public static function ensureAchievementsConfig(PDO $pdo): void
     {

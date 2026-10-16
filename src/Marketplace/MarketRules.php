@@ -49,17 +49,16 @@ class MarketRules
             'operationRetentionSeconds'=>2592000,'queryCandidates'=>256,'pageSize'=>50];
     }
     public static function emptyHeader(): array { return ['version'=>0,'revision'=>0,'enabled'=>false,'currencyKey'=>null,'feeBps'=>null,'ruleCount'=>0,'activeRuleCount'=>0,'projectId'=>null,'escrowCount'=>0,'retainedCount'=>0,'bucket'=>0,'writes'=>0,'exists'=>false]; }
-    public static function emptyPlayer(): array { return ['revision'=>0,'openIds'=>[],'historyIds'=>[],'receipts'=>[],'floor'=>0,'nextAllowedAt'=>0,'banUntil'=>null,'reason'=>'','deleteAfter'=>null,'deletionComplete'=>false,'exists'=>false]; }
+    public static function emptyPlayer(): array { return ['revision'=>0,'openIds'=>[],'historyIds'=>[],'floor'=>0,'nextAllowedAt'=>0,'banUntil'=>null,'reason'=>'','deleteAfter'=>null,'deletionComplete'=>false,'exists'=>false]; }
     public static function window(array $player,int $issued,int $now): void
     { if ($issued>$now+30000) self::invalid(); if ($issued<$now-self::RETENTION||$issued<=$player['floor']) self::fail('OPERATION_EXPIRED'); }
-    public static function receipt(array $player,string $id,string $hash): ?array
-    { foreach ($player['receipts'] as $r) if ($r['receipt']['operationId']===$id) { if (!hash_equals($r['hash'],$hash)) self::fail('OPERATION_CONFLICT'); return $r['receipt']; } return null; }
-    public static function record(array $p,array $receipt,string $hash,int $issued,int $now,int $limit): array
+    /** Old receipts remain readable until the next committed player write. Never copy them into listings. */
+    public static function legacyReceipt(array $player,string $id,?string $hash=null): ?array
+    { foreach ($player['receipts']??[] as $r) if ($r['receipt']['operationId']===$id) { if ($hash!==null&&!hash_equals($r['hash'],$hash)) self::fail('OPERATION_CONFLICT'); return $r['receipt']; } return null; }
+    public static function compactPlayer(array $p): array
     {
-        $all=array_merge($p['receipts'],[['hash'=>$hash,'issued'=>$issued,'recorded'=>$now,'receipt'=>$receipt]]);
-        $p['receipts']=array_slice(array_values(array_filter($all,static function($r)use($now){return $r['recorded']>=$now-self::RETENTION;})),-$limit);
-        $ids=array_column(array_column($p['receipts'],'receipt'),'operationId');
-        foreach ($all as $r) if (!in_array($r['receipt']['operationId'],$ids,true)) $p['floor']=max($p['floor'],$r['issued']); return $p;
+        foreach ($p['receipts']??[] as $r) $p['floor']=max($p['floor'],$r['issued']);
+        unset($p['receipts']);return $p;
     }
     public static function cursor(array $v): string { $s=rtrim(strtr(base64_encode(self::json($v)),'+/','-_'),'='); if (strlen($s)>512) self::invalid(); return $s; }
     public static function unCursor(?string $v): ?array

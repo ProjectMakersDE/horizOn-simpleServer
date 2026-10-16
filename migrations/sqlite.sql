@@ -336,7 +336,8 @@ CREATE TABLE IF NOT EXISTS player_market(user_id TEXT PRIMARY KEY,active_user_id
 CREATE INDEX IF NOT EXISTS idx_market_deleted ON player_market(active_user_id,user_id);
 CREATE TABLE IF NOT EXISTS market_listings(id TEXT PRIMARY KEY COLLATE BINARY,revision INTEGER NOT NULL,status TEXT NOT NULL COLLATE BINARY,
  item_key TEXT NOT NULL COLLATE BINARY,price INTEGER NOT NULL,created_millis INTEGER NOT NULL,due_kind INTEGER NOT NULL,due_millis INTEGER NOT NULL,
- return_owner TEXT NOT NULL,data TEXT NOT NULL);
+ return_owner TEXT NOT NULL,create_actor TEXT COLLATE BINARY,create_operation TEXT COLLATE BINARY,
+ close_actor TEXT COLLATE BINARY,close_operation TEXT COLLATE BINARY,data TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_market_price ON market_listings(status,price,id);
 CREATE INDEX IF NOT EXISTS idx_market_item_price ON market_listings(status,item_key,price,id);
 CREATE INDEX IF NOT EXISTS idx_market_admin ON market_listings(created_millis,id);
