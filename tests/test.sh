@@ -1084,6 +1084,12 @@ if php tests/groups-migration.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 
 # ---- Items: exact JSON/canonical bytes, paid grants and SQLite/independent-process races ----
 if php tests/items-http.php "$BASE_URL" "$API_KEY" "$USER_ID" "$SESSION_TOKEN"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 if php tests/items.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
+if php tests/shared-objects-http.php "$BASE_URL" "$API_KEY" "$USER_ID" "$SESSION_TOKEN"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/shared-objects.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/shared-objects-notice.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/shared-objects-migration.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if python3 tests/shared-objects-seek.py; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 if php tests/items-migration.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
 # Exercise direct existing-file dispatch, which Apache/CGI can bypass the index router for.
@@ -1132,6 +1138,16 @@ IT_CLI_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TEST_
 assert_status 'Items operator rejects direct HTTP before bootstrap' 403 "$IT_CLI_STATUS"
 IT_CLI_BODY=$(curl -s "http://localhost:${TEST_PORT}/bin/items.php")
 if [ -z "$IT_CLI_BODY" ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); echo 'FAIL: Items operator exposed data'; fi
+
+SO_CLI_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TEST_PORT}/bin/shared-objects.php")
+assert_status 'Shared Objects operator rejects direct HTTP before bootstrap' 403 "$SO_CLI_STATUS"
+SO_CLI_BODY=$(curl -s "http://localhost:${TEST_PORT}/bin/shared-objects.php")
+if [ -z "$SO_CLI_BODY" ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); echo 'FAIL: Shared Objects operator exposed data'; fi
+
+SO_RECIPE_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TEST_PORT}/examples/shared_objects_notice.php")
+assert_status 'Trusted Shared Objects recipe rejects HTTP before state/config access' 403 "$SO_RECIPE_STATUS"
+SO_RECIPE_BODY=$(curl -s "http://localhost:${TEST_PORT}/examples/shared_objects_notice.php")
+if [ -z "$SO_RECIPE_BODY" ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); echo 'FAIL: trusted recipe exposed data'; fi
 
 # ---- Summary ----
 echo ""

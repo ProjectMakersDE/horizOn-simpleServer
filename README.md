@@ -27,6 +27,7 @@ Built for indie game developers and small studios who want full control over the
 - Friends: bilateral requests, explicit revisions, blocklists and atomic Inbox notifications
 - Groups: open/request/invite membership, leader/officer/member roles, private object data and bounded member pages
 - Items: indexed catalog, unique inventory instances, rule-bound properties, equip/discard and atomic paid item grants
+- Shared Objects: opaque binary data, collection permissions, indexed queries, explicit revisions and bounded cleanup
 - User feedback collection
 - User log ingestion (INFO, WARN, ERROR)
 - Crash reporting with automatic grouping, fingerprinting, and regression detection
@@ -86,6 +87,9 @@ This table compares the self-hosted Simple Server with the fully managed [horizO
 | **Items** | | |
 | Catalog pages, unique inventory, rule-bound properties and atomic paid grants | :white_check_mark: | :white_check_mark: |
 | Catalog administration / inventory inspection | local operator CLI | scoped dashboard / Account Key |
+| **Shared Objects** | | |
+| Opaque bytes, indexed queries and owner/friends/group permissions | :white_check_mark: | :white_check_mark: |
+| Collection administration and ordinary trusted game notices | local operator CLI | scoped dashboard / trusted backend |
 | **User Feedback** | | |
 | Feedback submission | :white_check_mark: | :white_check_mark: |
 | **User Logs** | | |
@@ -1091,3 +1095,168 @@ purchase uses7 SELECTs and2 DML statements inside one transaction. Direct grant
 uses2 plus at most4 template reads and1 inventory CAS. SQLite adds BEGIN/COMMIT;
 MySQL PDO transaction-method calls are outside the SQL-text counters. These are
 statement counts, not hosted latency or measured maximum capacity.
+
+## Shared Objects (self-hosted REST)
+
+A collection stores opaque bytes and separately indexed metadata. The server never
+interprets the payload as game state. Every App route requires the installation
+API key and the exact `userId` player's Bearer session:
+
+| Method | Relative route | Input / concurrency |
+|---|---|---|
+| GET | `/shared-objects/collections` | `userId`, optional `afterKey,limit,catalogRevision` |
+| GET | `/shared-objects/{collection}/usage` | `userId`; own retained usage revision |
+| GET | `/shared-objects/{collection}/objects/{objectId}` | `userId` |
+| POST | `/shared-objects/{collection}/query` | `userId,mode,limit` and one indexed selector |
+| POST | `/shared-objects/{collection}/objects` | `userId,dataBase64,search,position,groupId`; `If-Match` usage revision |
+| PUT | `/shared-objects/{collection}/objects/{objectId}` | `userId,dataBase64,search,position`; `If-Match` object revision |
+| DELETE | `/shared-objects/{collection}/objects/{objectId}` | `userId`; `If-Match` object revision |
+
+`If-Match` accepts one unquoted or quoted decimal safe integer, including0 for an
+unused owner ledger. Wildcards and weak validators are rejected. Create returns a
+fresh server UUID. Keep the original input and revision after a timeout; inspect
+usage and objects before making an explicit new decision. Never silently replace
+the revision or repeat a create. Update replaces bytes/search/position, preserves
+owner/group and the original expiration, and increments both object and usage
+revisions. Delete retains the owner revision even at count0, preventing old creates
+from becoming valid again. Reads never create usage or quota documents.
+
+The object DTO is `{id,collection,ownerId,groupId,revision,dataBase64,search,
+position,createdAt,updatedAt,expiresAt}`. Data is canonical padded RFC4648 Base64,
+including `""` for empty bytes; binary NUL and nontext bytes survive unchanged.
+`search` is always an object, including `{}`; `position`, `groupId` and `expiresAt`
+retain null when absent. Integers must use exact JSON integer tokens within
+±9007199254740991. Strings/fractions/exponents are not coerced, and decoded duplicate
+JSON keys and invalid Unicode are refused.
+
+Read policies are `owner`, `friends`, `group`, `all`, `dashboard`; write policies
+are `owner`, `group`, `dashboard`. Friends means a current bilateral relationship
+with neither block direction, and grants reads only. Group access checks current
+membership; row revision locks fence leave/rejoin and group deletion on writes.
+Owners retain access to their own group objects after leaving and can remove them.
+Dashboard-only collections reject App access. Expired objects and deleted owners
+are hidden from App reads. Operator CLI inspection is separate from player rights.
+
+Queries use exactly one authorized partition: all, one owner, or one group. Modes
+are `list`, `owner` (explicit `ownerId`), `field` (`field` plus `equal`, or both
+`min,max`), `rectangle` (`minX,maxX,minY,maxY`) and `random` (integer `field,min,max`).
+A friends collection needs an explicit authorized `ownerId`; a group collection
+needs `groupId`. There is no friend/group fanout, OR search, substring or offset
+scan. Random uses at most two pivoted seeks and returns varied, nonuniform results;
+it has no continuation cursor. Normal pages return at most50 objects and1MiB of
+decoded payload, examining at most256 indexed metadata candidates. A filtered
+page may be empty with a `nextCursor`; continue explicitly with the unchanged
+query and limit. Cursors bind collection revision, query, actor and partition;
+they never grant access. A refresh suggests `pollAfterSeconds:120`; no automatic
+polling or page loop is provided. Query metadata and selected payloads share one
+snapshot; blobs are fetched only for selected IDs, with revision/length checks.
+
+Local operator equivalents reject HTTP before configuration/database access:
+
+```bash
+php bin/shared-objects.php collections [AFTER_KEY] [CATALOG_REVISION]
+php bin/shared-objects.php put world EXPECTED_CATALOG_REVISION < world.json
+php bin/shared-objects.php usage world PLAYER_UUID
+php bin/shared-objects.php get world OBJECT_UUID
+php bin/shared-objects.php query world < indexed-query.json
+php bin/shared-objects.php create world EXPECTED_USAGE_REVISION < object.json
+php bin/shared-objects.php update world OBJECT_UUID EXPECTED_OBJECT_REVISION < object.json
+php bin/shared-objects.php delete world OBJECT_UUID EXPECTED_OBJECT_REVISION
+php bin/shared-objects.php limits
+php bin/shared-objects.php cleanup-expired
+php bin/shared-objects.php cleanup-deleted [AFTER_USER_UUID]
+```
+
+Operator object creation uses `ownerId` instead of `userId`. Query bodies omit
+`userId` and still specify the required owner/group partition. An example world
+map definition is:
+
+```json
+{"name":"World map","active":true,"readPolicy":"all","writePolicy":"owner","maxObjectBytes":8192,"maxObjectsPerOwner":10,"ttlSeconds":null,"searchFields":[{"key":"strength","type":"integer"}],"positionEnabled":true}
+```
+
+First create `{userId,dataBase64,search:{strength:100},position:{x:4,y:8}}` with the
+reviewed usage revision. A world view queries a bounded rectangle and explicitly
+follows its cursor. Friends/private maps use the matching collection policy and
+one explicit partition. Rendering and decoding the bytes belongs to the game.
+
+One installation is one project: fixed self-hosted caps are100 lifetime collection
+keys,2GiB charged storage and64KiB decoded data per object. A definition permits
+1..100 objects per owner, at most3 typed search fields (`integer` or UTF-8 string
+at most96bytes), optional integer position and null or60..2592000-second TTL.
+Read/write policy, search schema, position and TTL become permanently immutable
+after the first object, even after emptying the collection. Archive/name/size/count
+changes remain available; no hard-delete/reuse of collection keys. Retained
+objects and owner revisions survive lower limits. Charge is decoded bytes plus
+8192bytes per object and512bytes per owner/collection ledger; this conservative
+accounting includes metadata/index reserve, not a measured hosted capacity claim.
+
+The additive migration creates six tables: catalog, definitions, account quota,
+owner usage, object metadata and separate BLOB payloads. Quota, usage, permission
+fences and both halves of each object commit on the same PDO and explicit
+`SqlTransaction`. Failed joins to an external native transaction use a savepoint,
+so catching a refusal cannot publish partial quota or bytes. Public MySQL reads
+require their own repeatable-read snapshot and refuse opaque external transactions:
+a session default cannot prove an individual transaction's isolation override.
+SQLite reads use a consistent deferred snapshot. Physical user deletion retains
+an indexed nullable-FK usage anchor and keeps bytes charged until cleanup refunds
+them. Schedule operator cleanup: expiry removes at most20 objects per call;
+deleted-user cleanup handles at most10 owner anchors, each bounded to20 objects
+and20 empty usage ledgers. Follow `nextAfterUserId`, then repeat remaining work.
+Never disable foreign keys or manually erase usage/quota anchors.
+
+### Trusted asynchronous PvP notice recipe
+
+A game backend can store a defender's opaque defense object, query opponents by
+indexed strength, and retain the selected defense UUID/revision. Combat and any
+validated run/result must be independently verified by a trusted backend. Hosted
+Validated Actions remains Cloud-only; this PHP edition neither simulates combat
+nor offers run-ticket validation or anti-cheat guarantees. A player-written object
+or result cannot authorize a victory, grant, currency change or trusted notice.
+
+After verification, the backend freezes a single ordinary notice intent:
+`apiKeyId,userId,operationId,issuedAt,expiresAt,textKey,reference,parameters`, together
+with `{defenseObjectId,defenseRevision,runId}`. Use the installation Inbox catalog's
+`apiKeyId`, a fresh once-persisted UUID, original issued time and a deadline no more
+than7days later. There are no attachments or rewards. The local operator command
+`php bin/shared-objects.php notice < immutable-intent.json` uses the normal Inbox
+receipt/floor path and never the pending-source bypass.
+
+The executable backend-only example stages the complete intent in an absolute
+path under an existing private directory before delivery:
+
+```bash
+php examples/shared_objects_notice.php stage /private/game-state/defense-notice.json < verified-intent.json
+php examples/shared_objects_notice.php deliver /private/game-state/defense-notice.json
+```
+
+The stage input is `{intent:{...},binding:{defenseObjectId,defenseRevision,runId}}`.
+Its0700 lock and0600 atomic state file preserve the exact UUID, timestamps, content
+and binding across restart. An attempt is durable before delivery. Only the
+committed-send adapter can mark `delivered`; an already active SQL transaction is
+refused so a later outer rollback cannot lose a falsely completed notice. Lost
+responses, full Inbox or unavailable delivery retain the original pending intent;
+retry until its fixed deadline. Receipt expiry/conflict becomes terminal
+`unconfirmed`; never generate a replacement UUID or extend the deadline. An
+interrupted `.next` file, stale lock or corrupt state blocks sending and requires
+operator reconciliation with the original backup, not silent deletion/recreation.
+Once delivered/expired/unconfirmed, the recipe makes no additional send. This is
+an ordinary localized game notice and does not prove the reported outcome.
+
+`bash tests/test.sh` covers all7 actual HTTP routes, operator/recipe HTTP isolation,
+SQLite process races, permissions, rollback, opaque binary limits, bounded pages,
+legacy-schema migration and durable lost-response recovery. The production seek
+SQL also has a10k-row VM-work negative control: SQLite uses a compound tuple bound;
+MySQL continuation splits equal-sort/ID and strictly-later ranges with one shared
+256-candidate budget. `php tests/shared-objects.php` and migration tests accept
+MySQL only via explicit loopback `HORIZON_SHARED_OBJECTS_TEST_DSN` naming
+`task1012_<hex>` plus `HORIZON_SHARED_OBJECTS_TEST_USER/PASSWORD`; they never discover
+application credentials or a default database. Actual MySQL/PHP7.4 and CI results
+are recorded separately from local execution.
+
+Service SQL counts exclude HTTP authentication and bootstrap. SQLite point GET
+and rectangle query use5 SELECTs; create uses6 SELECTs plus6 bounded DML; update
+and delete6 plus4 DML. Each scope additionally begins/commits a transaction. Query
+continuations on MySQL may use two bounded metadata SELECTs plus one selected
+payload fetch. These are statement counts and scan-plan bounds, not measured
+hosted latency or a maximum-throughput promise.

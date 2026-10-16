@@ -21,7 +21,7 @@ set_exception_handler(function (Throwable $e) {
 // CORS headers for all responses
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, X-API-Key, Authorization');
+header('Access-Control-Allow-Headers: Content-Type, X-API-Key, Authorization, If-Match');
 
 // Load core
 $baseDir = __DIR__;
@@ -49,6 +49,7 @@ require_once $baseDir . '/src/Achievements/AchievementController.php';
 require_once $baseDir . '/src/Friends/FriendsController.php';
 require_once $baseDir . '/src/Groups/GroupController.php';
 require_once $baseDir . '/src/Items/ItemController.php';
+require_once $baseDir . '/src/SharedObjects/SharedObjectController.php';
 require_once $baseDir . '/src/UserFeedback/UserFeedbackController.php';
 require_once $baseDir . '/src/UserLogs/UserLogsController.php';
 require_once $baseDir . '/src/CrashReporting/CrashReportingController.php';
@@ -125,6 +126,15 @@ $router->get($prefix . '/items/catalog', [ItemController::class, 'catalog']);
 $router->post($prefix . '/items/adjust', [ItemController::class, 'adjust']);
 $router->post($prefix . '/items/equip', [ItemController::class, 'equip']);
 $router->post($prefix . '/items/discard', [ItemController::class, 'discard']);
+
+// --- Shared Objects: opaque bytes, bounded metadata pages, exact If-Match and no public admin/grant route ---
+$router->get($prefix . '/shared-objects/collections', [SharedObjectController::class, 'collections']);
+$router->get($prefix . '/shared-objects/{collection}/usage', [SharedObjectController::class, 'usage']);
+$router->get($prefix . '/shared-objects/{collection}/objects/{objectId}', [SharedObjectController::class, 'get']);
+$router->post($prefix . '/shared-objects/{collection}/query', [SharedObjectController::class, 'queryObjects']);
+$router->post($prefix . '/shared-objects/{collection}/objects', [SharedObjectController::class, 'create']);
+$router->put($prefix . '/shared-objects/{collection}/objects/{objectId}', [SharedObjectController::class, 'update']);
+$router->delete($prefix . '/shared-objects/{collection}/objects/{objectId}', [SharedObjectController::class, 'delete']);
 
 // --- User Management ---
 $router->post($prefix . '/user-management/signup', [UserManagementController::class, 'signup']);
