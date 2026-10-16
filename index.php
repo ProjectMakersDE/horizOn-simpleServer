@@ -51,6 +51,7 @@ require_once $baseDir . '/src/Groups/GroupController.php';
 require_once $baseDir . '/src/Items/ItemController.php';
 require_once $baseDir . '/src/SharedObjects/SharedObjectController.php';
 require_once $baseDir . '/src/Matches/MatchController.php';
+require_once $baseDir . '/src/Chat/ChatController.php';
 require_once $baseDir . '/src/UserFeedback/UserFeedbackController.php';
 require_once $baseDir . '/src/UserLogs/UserLogsController.php';
 require_once $baseDir . '/src/CrashReporting/CrashReportingController.php';
@@ -96,6 +97,30 @@ $realtimeUnsupported = function (Request $req) {
 $router->post($prefix . '/realtime/session', $realtimeUnsupported);
 $router->post($prefix . '/realtime/subscriptions', $realtimeUnsupported);
 $router->get($prefix . '/realtime/socket', $realtimeUnsupported);
+
+// --- Chat is hosted-only. Preserve app authentication; never emulate storage or polling. ---
+$router->get($prefix . '/chat/limits', [ChatController::class, 'appUnsupported']);
+$router->post($prefix . '/chat/channels/open', [ChatController::class, 'appUnsupported']);
+$router->post($prefix . '/chat/channels/{id}/sync', [ChatController::class, 'appUnsupported']);
+$router->post($prefix . '/chat/channels/{id}/messages', [ChatController::class, 'appUnsupported']);
+$router->get($prefix . '/chat/operations/{operationId}', [ChatController::class, 'appUnsupported']);
+$router->post($prefix . '/chat/channels/{id}/messages/{messageId}/report', [ChatController::class, 'appUnsupported']);
+
+// These hosted admin paths disclose only the same constant unsupported response.
+// There is no Account-Key authentication/moderation implementation in this edition.
+$chatAdmin = '/api/v1/admin/features/chat/{apiKeyId}';
+foreach (['/config', '/limits', '/channels', '/channels/{id}', '/reports', '/players/{userId}/moderation'] as $chatPath) {
+    $router->get($chatAdmin . $chatPath, [ChatController::class, 'operatorUnsupported']);
+}
+foreach (['/config', '/players/{userId}/moderation'] as $chatPath) {
+    $router->put($chatAdmin . $chatPath, [ChatController::class, 'operatorUnsupported']);
+}
+foreach (['/channels/{id}/messages/{messageId}', '/reports/{id}'] as $chatPath) {
+    $router->delete($chatAdmin . $chatPath, [ChatController::class, 'operatorUnsupported']);
+}
+foreach (['/reports/{id}/resolve', '/cleanup'] as $chatPath) {
+    $router->post($chatAdmin . $chatPath, [ChatController::class, 'operatorUnsupported']);
+}
 
 // --- Inbox: authenticated REST parity, no public operator/admin routes ---
 $router->get($prefix . '/inbox', [InboxController::class, 'get']);

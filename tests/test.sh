@@ -1090,6 +1090,7 @@ if php tests/shared-objects.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)
 if php tests/shared-objects-notice.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 if php tests/shared-objects-migration.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 if python3 tests/shared-objects-seek.py; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/chat-http.php "$BASE_URL" "$API_KEY" "$USER_ID" "$SESSION_TOKEN"; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); fi
 if php tests/matches-http.php "$BASE_URL" "$API_KEY"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 if php tests/matches.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 if php tests/matches-migration.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
@@ -1156,6 +1157,11 @@ SO_RECIPE_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TE
 assert_status 'Trusted Shared Objects recipe rejects HTTP before state/config access' 403 "$SO_RECIPE_STATUS"
 SO_RECIPE_BODY=$(curl -s "http://localhost:${TEST_PORT}/examples/shared_objects_notice.php")
 if [ -z "$SO_RECIPE_BODY" ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); echo 'FAIL: trusted recipe exposed data'; fi
+
+CHAT_CLI_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TEST_PORT}/bin/chat.php")
+assert_status 'Chat unsupported CLI rejects direct HTTP before bootstrap' 403 "$CHAT_CLI_STATUS"
+CHAT_CLI_BODY=$(curl -s "http://localhost:${TEST_PORT}/bin/chat.php")
+if [ -z "$CHAT_CLI_BODY" ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); echo 'FAIL: Chat operator exposed response data'; fi
 
 # ---- Summary ----
 echo ""
