@@ -90,7 +90,9 @@ try {
     $old = $op(-1000);
     $service->adjust($user, 'gold', 1, 'once', $old);
     for ($i = 0; $i < 51; $i++) { $now++; $service->correct($user, [['key' => 'gold', 'balance' => 100]], 'fixture', $op()); }
-    check(50, count($service->history($user)['receipts']), 'bounded receipts');
+    check([], $service->history($user)['receipts'], 'Purchase history is not retained');
+    $rawQuery=$pdo->prepare('SELECT data FROM player_values WHERE user_id=?');$rawQuery->execute([$user]);$rawState=json_decode($rawQuery->fetchColumn(),true);
+    check(50*57,strlen(base64_decode($rawState['q'])),'Exactly fifty compact public guards');$rawQuery->closeCursor();
     rejected('OPERATION_EXPIRED', static function () use ($service, $user, $old) { $service->adjust($user, 'gold', 1, 'once', $old); });
     // Two independent processes share the same SQLite state, followed by overspend races.
     $race = $op(5); $now += 5;
@@ -138,7 +140,7 @@ try {
     $service->configure($numeric, 3); $numericId = $op();
     $numericPurchase = $service->purchase($user, 'numeric', $numericId);
     check(['0', '1'], array_column($numericPurchase['operation']['applied'], 'key'), 'numeric-looking keys stay strings');
-    check(['0', '1'], array_column($service->purchase($user, 'numeric', $numericId)['operation']['applied'], 'key'), 'numeric key replay stays strings');
+    $numericReplay=$service->purchase($user,'numeric',$numericId);check([], $numericReplay['operation']['applied'], 'Replay has no historical payload');check(['0','1'],array_column($numericReplay['values'],'key'),'Current numeric key snapshot stays strings');
     $service->configure($config, 4);
     $now += 86400000;
     check(0, $service->get($user)['values'][1]['earnedToday'], 'UTC reset');

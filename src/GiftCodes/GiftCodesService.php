@@ -117,7 +117,7 @@ class GiftCodesService
             $redemption = Database::uuid(); $date = gmdate('Y-m-d H:i:s', intdiv($now, 1000));
             $this->pdo->prepare('INSERT INTO gift_code_redemptions(id,gift_code_id,user_id,redeemed_at,idempotency_id,gift_data) VALUES(?,?,?,?,?,?)')
                 ->execute([$redemption, $gift['id'], $user, $date, $operation, $gift['reward_data']]);
-            $state = $rewards ? $this->values()->grant($user, $rewards, 'giftcode:' . $gift['id'] . ':' . $redemption, $now, 'giftcode:' . $gift['id']) : null;
+            $state = $rewards ? $this->values()->grantFromSource($user, $rewards, 'giftcode:' . $gift['id'] . ':' . $redemption, $now, 'giftcode:' . $gift['id']) : null;
             $grants = $this->applyGrants($user, PlayerProfileController::parseGrants($gift['reward_data']));
             $this->pdo->prepare('UPDATE gift_code_redemptions SET granted_values=?,value_granted_at=? WHERE id=?')
                 ->execute([json_encode($rewards, JSON_THROW_ON_ERROR), $rewards ? $now : null, $redemption]);

@@ -690,15 +690,17 @@ Server-owned integer balances and atomic catalogue purchases use the hosted SDK 
 
 All four require the project `X-API-Key` and that player's active Bearer session. Amounts
 are exact JSON integers within ±9,007,199,254,740,991. Direct adjustments default to disabled.
-The server checks balance ceilings, daily earning/adjustment caps and offer purchase caps.
+The server checks balance ceilings and daily earning/adjustment caps. Per-offer daily
+purchase caps are removed. A non-null `purchasesPerDay` in new configuration is rejected.
 An offer checks and debits all costs before crediting any reward, within one SQL transaction.
 Failures retain all values and include the current state where available.
 
 Create one operation ID as `unixMillis:UUID` for an action and retain it for retries. A retained
-receipt returns `operation.replayed=true`. Reusing its ID for another payload returns
+guard returns `operation.replayed=true`, empty `applied`/`items` and the current value state.
+Reusing its ID for another payload returns
 `OPERATION_CONFLICT`. Old IDs outside the safe replay window return `OPERATION_EXPIRED` and
 must not be silently replaced with a new ID. Read `operationWindow.serverTime` and
-`oldestAcceptedAt` to account for client clock skew. The last 50 receipts are retained for up to
+`oldestAcceptedAt` to account for client clock skew. By default the last 50 guards are retained for up to
 30 days. Their eviction advances a permanent timestamp floor so forgotten operations never
 credit again. Reads never reveal another player's balances.
 
@@ -719,24 +721,53 @@ A configuration has `definitions` and `offers`, matching the hosted Dashboard JS
 ```
 
 A correction has `values: [{"key":"gold","balance":250}]`, a mandatory `note` and a stable
-`operationId`. It records the operator source, note and original applied delta. Removed
+`operationId`. The note participates in conflict detection but is not retained as history. Removed
 values retain their balances and initialization markers. Restoring a definition never repeats
-its initial balance. Limits are 64 definitions, 1000 offers, 256 distinct lifetime value keys,
-1000 distinct purchased offer keys per UTC day, 1 MiB of configuration and 50 player receipts.
-The operator can inspect preserved values before editing storage directly.
+its initial balance. The operator sets `PLAYER_VALUES_DEFINITIONS`, `PLAYER_VALUES_OFFERS`
+and `PLAYER_VALUES_RECEIPTS` in `.env` (defaults 64, 1000, 50). Raising them works beyond the
+defaults; lowering them preserves existing data on reads. The UInt8 slot format permits 256
+lifetime value keys. Configuration remains bounded to 1 MiB. The `player` command returns
+current balances and an empty compatibility `receipts` list.
 
 Storage adds one bounded player row and separate configuration/offer tables. A normal write
 reads the small definition set, one player row and optionally one offer, then writes the player
 row. SQLite uses `BEGIN IMMEDIATE`; MySQL locks the target user row even before its first
-balance exists. An internal `PlayerValuesService::grant` reuses an outer transaction for a
-future inbox/gift-code operation. Its caller must propagate failures and roll back that entire
-transaction. Do not catch a failed grant and commit its surrounding business operation.
+balance exists. Each nonzero balance or daily counter occupies 9 raw bytes (one project slot,
+eight integer bytes). Initialized zeros need only a bit in the at-most 32-byte bitmap. A public
+operation guard holds a format byte, UUID 16 bytes, timestamp 8 bytes and SHA-256 32 bytes, exactly
+57 raw bytes. SQL stores these binary fields as Base64 in a compact JSON envelope for both
+SQLite and MySQL. Base64 and the envelope are included in measurements, not guessed as a
+reserve. These SQL byte counts differ from hosted MongoDB BSON counts and exclude SQL
+page/index overhead. No per-offer purchase map or copied applied rewards/notes are persisted.
+
+Gift-code and Inbox sources use `grantFromSource` within their existing explicit
+`SqlTransaction` and own the durable replay decision. This writes balances without another
+player-values guard. A standalone call fails; failures roll back the complete source action.
+The compatibility internal `grant` method retains a thin guard for callers without that contract.
+Never catch a failed nested grant and commit its surrounding business operation.
+
+Legacy rows remain readable. Normal state mutations encode them compactly without losing
+balances, initialization or replay identities. To convert inactive rows, stop all writers,
+take a backup and verify its restoration, then run the explicit bounded operator command:
+
+```sh
+php bin/player-values.php compact-inspect - 100
+php bin/player-values.php compact-apply - 100 --writes-stopped --backup-verified
+```
+
+Repeat using the returned `after` cursor until `scanned` is 0. The two flags are operator
+attestations, not an automatic backup verification. Each page is atomic, checks the original
+row bytes, preserves public revisions and rejects unknown data without advancing. Reruns are
+idempotent. There is no login scan or automatic background migration. Retain the original backup
+while any older feature payload still needs source reconciliation.
 
 Run `bash tests/test.sh` for HTTP, authentication, integer validation and SQLite races. The
 storage fixture also accepts `HORIZON_VALUES_TEST_DSN`, `HORIZON_VALUES_TEST_USER` and
 `HORIZON_VALUES_TEST_PASSWORD` for an isolated MySQL database named `task1004_<hex>`.
 Never point it at application data. SQLite and actual MySQL 8.4 both pass the rollback,
-replay, receipt eviction and independent-process concurrent-purchase fixture.
+replay, receipt eviction and independent-process concurrent-purchase fixture. The compact
+fixture `tests/player-values-compact.php` also exercises raised/lowered quotas, source rollback,
+exact storage lengths and migration rejection. Run each SQL fixture in a fresh isolated database.
 
 ## Player Statistics (TASK-1005)
 
@@ -1068,11 +1099,11 @@ hosted-cluster capacity or throughput claim.
 A Player Values offer gains `itemRewards:[{itemKey,quantity}]`, absent meaning `[]`.
 Costs stay positive; at least one value reward or item reward is required. Unique
 item keys have quantity1..4 and total at most4. Purchase uses its original
-`unixMillis:UUID` operation ID. Debit, daily counters, the value receipt and item
+`unixMillis:UUID` operation ID. Debit, daily counters, the value guard and item
 grant share one explicit `SqlTransaction` and PDO; full/invalid inventory rolls
-everything back. Value-only offers issue no item SQL. The purchase operation gains
-original `items:[{instanceId,itemKey}]`, default `[]` for old receipts. Replay checks
-that retained PV receipt before current offers/catalog and never recreates an
+everything back. Value-only offers issue no item SQL. The first successful purchase
+returns `items:[{instanceId,itemKey}]`. A replay returns empty `applied` and `items`,
+checks the retained PV guard before current offers/catalog and never recreates an
 already discarded item. Explicitly refresh inventory after confirmed purchase.
 
 The server-only ItemService grant provider hashes original source, timestamp and

@@ -61,4 +61,14 @@ class Config
         $value = self::get($key, (string)$default);
         return (int)$value;
     }
+
+    /** Operator quotas are strict positive integers. Unbootstrapped SQL fixtures use the default. */
+    public static function operatorLimit(string $key, int $default, int $maximum = 2147483647): int
+    {
+        $value = self::$values[$key] ?? (string)$default;
+        if (!preg_match('/^[1-9][0-9]{0,9}$/D', $value) || (int)$value > $maximum) {
+            throw new InvalidArgumentException('Invalid operator limit: ' . $key);
+        }
+        return (int)$value;
+    }
 }
