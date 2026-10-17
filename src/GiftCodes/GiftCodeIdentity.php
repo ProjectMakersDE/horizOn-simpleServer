@@ -28,7 +28,9 @@ class GiftCodeIdentity
         if(!$this->scope->isRunning())throw new LogicException('Identity reservation requires owning scope');
         $lock=$this->pdo->query('SELECT id FROM gift_code_identity_lock WHERE id=1'.($this->mysql?' FOR UPDATE':''));if($lock->fetchColumn()===false)throw new RuntimeException('Gift identity lock not initialized');$lock->closeCursor();
         $q=$this->pdo->prepare('SELECT id FROM gift_codes WHERE LOWER(id)=:uuid OR v2_id=:binary'.($this->mysql?' FOR UPDATE':''));$q->bindValue(':uuid',GiftCodeProtocol::uuid($uuid));$q->bindValue(':binary',GiftCodeProtocol::binary($uuid),PDO::PARAM_LOB);$q->execute();
-        while(($id=$q->fetchColumn())!==false)if($id!==$sourceId)GiftCodeProtocol::fail('STATE_CONFLICT','Campaign UUID or legacy alias is already reserved');$q->closeCursor();
+        $owned=false;while(($id=$q->fetchColumn())!==false){if($id!==$sourceId)GiftCodeProtocol::fail('STATE_CONFLICT','Campaign UUID or legacy alias is already reserved');$owned=true;}$q->closeCursor();
+        // Permanent counters also reserve an identity after its campaign row was removed.
+        if(!$owned){$q=$this->pdo->prepare('SELECT 1 FROM gift_code_counts WHERE campaign_id=:binary LIMIT 1'.($this->mysql?' FOR UPDATE':''));$q->bindValue(':binary',GiftCodeProtocol::binary($uuid),PDO::PARAM_LOB);$q->execute();$retired=$q->fetchColumn()!==false;$q->closeCursor();if($retired)GiftCodeProtocol::fail('STATE_CONFLICT','Retired campaign UUID remains permanently reserved');}
     }
     public function assign(string $sourceId,string $uuid): void
     {
