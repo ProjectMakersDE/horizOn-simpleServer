@@ -275,6 +275,12 @@ CREATE TABLE IF NOT EXISTS player_items (
     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
+-- Immutable item bases and stable UInt16 template identities. Existing data is not backfilled.
+CREATE TABLE IF NOT EXISTS item_storage_catalog(id INTEGER PRIMARY KEY,next_slot INTEGER NOT NULL,next_version INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS item_bases(version INTEGER PRIMARY KEY,slot INTEGER NOT NULL,data TEXT NOT NULL,shape BLOB NOT NULL,ref_count INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_item_basis_shape ON item_bases(slot,shape,version);
+CREATE TABLE IF NOT EXISTS item_template_storage(item_key TEXT PRIMARY KEY COLLATE BINARY,slot INTEGER NOT NULL UNIQUE,version INTEGER NOT NULL);
+
 -- Shared Objects: metadata seeks never read opaque payload blobs. Quota/usage survive deletion until bounded cleanup.
 CREATE TABLE IF NOT EXISTS shared_object_catalog (id INTEGER PRIMARY KEY, revision INTEGER NOT NULL, total INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS shared_object_collections (collection_key TEXT PRIMARY KEY COLLATE BINARY, revision INTEGER NOT NULL, data TEXT NOT NULL);

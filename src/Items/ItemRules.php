@@ -95,7 +95,13 @@ class ItemRules
     public static function decodeState(string $json): array
     {
         $state=json_decode($json,true,64,JSON_THROW_ON_ERROR);
-        foreach ($state['instances'] as &$instance) $instance['properties']=(object)$instance['properties']; unset($instance);
+        $original=json_decode($json,false,64,JSON_THROW_ON_ERROR);
+        if(!is_array($original->instances??null))self::fail('MIGRATION_REQUIRED');
+        foreach($state['instances'] as $index=>&$instance){
+            $properties=$original->instances[$index]->properties??null;
+            if(!$properties instanceof stdClass)self::fail('MIGRATION_REQUIRED');
+            $instance['properties']=self::properties($properties);
+        }unset($instance);
         return $state;
     }
 }
