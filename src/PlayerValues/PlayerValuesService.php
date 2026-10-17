@@ -58,6 +58,9 @@ class PlayerValuesService
 
     public function config(bool $offers = true, bool $current = false): array
     {
+        // A locking player/state read must use the same current catalogue, even when
+        // the caller's outer MySQL scope already established an older RR snapshot.
+        $current = $current || ($this->mysql && $this->pdo->inTransaction());
         $row = $this->pdo->query('SELECT revision, definitions, known_keys FROM player_values_config WHERE id = 1' .
             ($current && $this->mysql ? ' FOR UPDATE' : ''))->fetch();
         if ($row === false) throw new RuntimeException('Player-values schema is not initialized');
