@@ -3,6 +3,7 @@
 declare(strict_types=1);
 require_once __DIR__.'/../Items/ItemJson.php';
 require_once __DIR__.'/../Inbox/InboxRules.php';
+require_once __DIR__.'/../Core/Config.php';
 
 class MarketFailure extends RuntimeException
 {
@@ -47,6 +48,20 @@ class MarketRules
         return ['openListingsPerPlayer'=>$open,'retainedListingsPerProject'=>$rows,'receiptsPerPlayer'=>$receipts,'historyPerPlayer'=>$receipts,'projectWritesPerMinute'=>$rate,
             'playerWriteIntervalMillis'=>1000,'minDurationSeconds'=>300,'maxDurationSeconds'=>604800,'terminalRetentionSeconds'=>604800,
             'operationRetentionSeconds'=>2592000,'queryCandidates'=>256,'pageSize'=>50];
+    }
+    /** Installation quotas are operator policy; nominal tariff defaults are not maximums. */
+    public static function operatorLimits(): array
+    {
+        $limits=self::limits('ENTERPRISE');
+        foreach(self::operatorKeys() as $field=>$key)$limits[$field]=Config::operatorLimit($key,$limits[$field]);
+        return $limits;
+    }
+    public static function operatorKeys(): array
+    { return ['openListingsPerPlayer'=>'MARKETPLACE_OPEN_LISTINGS','retainedListingsPerProject'=>'MARKETPLACE_RETAINED_LISTINGS','receiptsPerPlayer'=>'MARKETPLACE_LEGACY_RECEIPTS','historyPerPlayer'=>'MARKETPLACE_HISTORY','projectWritesPerMinute'=>'MARKETPLACE_WRITES_PER_MINUTE']; }
+    public static function validateLimits(array $limits): void
+    {
+        $policy=self::operatorKeys();
+        foreach(self::limits('ENTERPRISE') as $field=>$fixed)self::integer($limits[$field]??null,1,isset($policy[$field])?2147483647:$fixed);
     }
     public static function emptyHeader(): array { return ['version'=>0,'revision'=>0,'enabled'=>false,'currencyKey'=>null,'feeBps'=>null,'ruleCount'=>0,'activeRuleCount'=>0,'projectId'=>null,'escrowCount'=>0,'retainedCount'=>0,'bucket'=>0,'writes'=>0,'exists'=>false]; }
     public static function emptyPlayer(): array { return ['revision'=>0,'openIds'=>[],'historyIds'=>[],'floor'=>0,'nextAllowedAt'=>0,'banUntil'=>null,'reason'=>'','deleteAfter'=>null,'deletionComplete'=>false,'exists'=>false]; }
