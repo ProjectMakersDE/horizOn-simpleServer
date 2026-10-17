@@ -68,7 +68,7 @@ if ($dsn && !preg_match('/^mysql:host=127\.0\.0\.1;port=[0-9]{1,5};dbname=task10
 $target = $dsn ?: tempnam(sys_get_temp_dir(),'horizon-task1010-'); $pdo = null;
 try {
     $pdo = connect($target); $pdo->exec(file_get_contents(__DIR__ . '/../migrations/' . ($dsn ? 'mysql' : 'sqlite') . '.sql'));
-    Database::ensurePlayerValuesConfig($pdo); Database::ensureInboxConfig($pdo); Database::ensureUserActivityColumns($pdo);
+    Database::ensurePlayerValuesConfig($pdo); Database::ensureInboxConfig($pdo); Database::ensureUserActivityColumns($pdo); Database::ensureGroupStorage($pdo);
     $now = (int)(strtotime('2026-10-16T12:00:00Z') * 1000); $clock = static function () use (&$now) { return $now; };
     $service = new GroupService($pdo,$clock); $inbox = new InboxService($pdo,$clock);
     $insert = $pdo->prepare('INSERT INTO users(id,display_name,anonymous_token,created_at,email,session_token) VALUES(?,?,?,?,?,?)');
@@ -208,6 +208,19 @@ try {
     $pdo->statements = []; $service->detail($outsider,$pid); $costs['publicDetail'] = counts($pdo);
     $pdo->statements = []; $service->members($pageOwner,$pid,null,50); $costs['members50'] = counts($pdo);
     $costActor = $createUser(); $costOwner = $createUser(); $costGroup = $newGroup($costOwner); $pdo->statements = []; $service->change('join',$costActor,$costGroup['id'],1); $costs['openJoin'] = counts($pdo);
+    // Ten members is a measured scenario, never a runtime size limit.
+    $profileOwner=$createUser();$profileGroup=$newGroup($profileOwner);$profileUsers=[$profileOwner];
+    for($i=0;$i<9;$i++){$profileUsers[]=$u=$createUser();$service->change('join',$u,$profileGroup['id'],$i+1);}
+    $pdo->statements=[];$service->get($profileOwner);$costs['tenMemberGet']=counts($pdo);
+    $pdo->statements=[];$service->members($profileOwner,$profileGroup['id'],null,50);$costs['tenMemberPage']=counts($pdo);
+    $len=$dsn?'OCTET_LENGTH':'LENGTH';$q=$pdo->prepare('SELECT '.$len.'(data) FROM groups_state WHERE id=?');$q->execute([$profileGroup['id']]);$profile=['members'=>10,'groupJsonBytes'=>(int)$q->fetchColumn()];
+    $q=$pdo->prepare('SELECT '.$len.'(data) FROM player_groups WHERE user_id=?');$q->execute([$profileOwner]);$profile['oneMemberPlayerJsonBytes']=(int)$q->fetchColumn();
+    $q=$pdo->prepare('SELECT COUNT(*) AS rows_count,SUM('.$len.'(group_id)+'.$len.'(user_id)+'.$len.'(role)) AS text_bytes FROM group_members WHERE group_id=?');$q->execute([$profileGroup['id']]);$memberStorage=$q->fetch();
+    $profile['membershipRows']=(int)$memberStorage['rows_count'];$profile['membershipTextColumnOctets']=(int)$memberStorage['text_bytes'];
+    $profile['mysqlJoinedMillisBytes']=$dsn?80:null;$profile['keyFormat']='existing native CHAR36/TEXT; secondary indexes separate';
+    if($dsn){$pdo->query('ANALYZE TABLE groups_state,player_groups,group_members,group_pending_references,group_inbox_sources,group_storage')->fetchAll();$profile['wholeFixtureTableAllocations']=$pdo->query("SELECT TABLE_NAME,DATA_LENGTH,INDEX_LENGTH FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('groups_state','player_groups','group_members','group_pending_references','group_inbox_sources','group_storage') ORDER BY TABLE_NAME")->fetchAll();}
+    else {$profile['wholeFixtureSqlitePageSize']=(int)$pdo->query('PRAGMA page_size')->fetchColumn();$profile['wholeFixtureSqlitePages']=(int)$pdo->query('PRAGMA page_count')->fetchColumn();}
+    echo 'Groups native storage scenario (row payload octets; allocations cover entire fixture, not per-row estimates): '.json_encode($profile)."\n";
     echo 'Groups SQL statement counts excluding auth/bootstrap: ' . json_encode($costs) . "\n";
     echo 'Groups ' . ($dsn ? 'MySQL' : 'SQLite') . ': ' . $passed . " checks passed (real concurrency, lost acknowledgement, final CAS/Inbox/outer rollback, original issuer blocks, indexed bounded cleanup and pages).\n";
 } finally {

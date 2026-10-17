@@ -1105,25 +1105,26 @@ and the exact `userId` owner’s Bearer session:
 | POST | `/groups` | Create with explicit `expectedPlayerRevision`; fresh server-generated UUID |
 | GET | `/groups/{groupId}?userId=...` | Public metadata; private data/role only for members |
 | PUT | `/groups/{groupId}` | Replace metadata with explicit `expectedRevision` |
-| GET | `/groups/{groupId}/members?userId=...&limit=50&afterUserId=...` | Member-only UUID keyset page, at most50 |
+| GET | `/groups/{groupId}/members?userId=...&limit=50&afterUserId=...` | Member-only UUID keyset page, configured page size |
 | GET | `/groups/{groupId}/pending?userId=...` | Officer/leader view of current pending decisions |
 | POST | `/groups/{groupId}/{join,request,invite,accept-invite,decline-invite,cancel-invite,accept-request,decline-request,cancel-request,leave,remove,role,transfer,delete}` | Explicit membership/role action |
 
 Mutation bodies carry `userId` and a nonnegative safe-integer revision. Targeted
 actions also carry `targetUserId`; decisions carry the original `requestId` UUID.
 Roles are `leader`, `officer`, `member`; join modes are `open`, `request`, `invite`.
-A name is at most120UTF-8 bytes, description1024 and `data` is an object whose
-serialized JSON is at most2048UTF-8 bytes. Empty objects and arrays remain distinct;
+Name, description, object data bytes/depth and member page size follow the public
+`limits` below. Empty objects and arrays remain distinct;
 arbitrary object keys survive storage. Officers may update metadata and invite or
 remove ordinary members; only the leader may assign roles or transfer leadership.
 A nonsole leader must transfer before leaving. Group creation cannot accept a
 client-chosen ID. A timeout requires reading current state and an explicit new
 decision; never automatically substitute a revision or repeat a creation.
 
-The standalone limits are500 members and5 memberships per player, with at most20
-incoming invitations and20 outgoing requests per player, and20 of each pending
-kind per group. These maxima are separate from hosted tariff limits. Above-limit
-existing memberships can still leave or be removed. Acceptance rechecks both
+Operator defaults are500 members,5 memberships per player,2 incoming invitations
+and2 outgoing requests per player, and20 of each pending kind per group. All are
+positive configurable Int32 policy values, separate from hosted System Config.
+Lowering policy preserves complete retained reads and allows resolution/removal.
+New growth and newly supplied metadata must satisfy current policy. Acceptance rechecks both
 membership limits, exact invitation identity, original issuer and the shared
 Friends block policy. Changed player/group revisions, membership rows, reverse
 pending references and ordinary30-day Inbox notices commit atomically using one
@@ -1145,7 +1146,7 @@ php bin/groups.php cleanup-deleted [AFTER_USER_UUID]
 
 Physical user deletion retains an indexed nullable-FK player anchor. Cleanup handles
 at most10 deleted anchors and10 related groups per anchor per invocation; each
-group contains at most40 pending entries. It finds historical invitations through
+group processes its actual retained pending entries. It finds historical invitations through
 a reverse index including original issuers, rather than scanning lifetime history.
 Follow `nextAfterUserId` until null, then start another sweep if incomplete results
 remain. This cursor prevents early blocked leader successions from starving later
@@ -1164,15 +1165,58 @@ credentials or host-default database are discovered. `php tests/groups-migration
 checks an actual pre-feature schema. Real MySQL and PHP7.4 results are recorded
 separately after isolated probes.
 
-Service SQL statement counts exclude HTTP authentication and bootstrap. On SQLite,
-an empty snapshot uses3 SELECTs, a populated snapshot4, public detail3 and a
-50-member page5; an open join uses9 SELECTs plus4 bounded DML statements. Each
-scope additionally uses BEGIN/COMMIT. MySQL uses the same3/4/3/5 read counts
-and11 SELECTs plus4 DML for an open join, including its current-revision locks.
-The probe records SQL text; MySQL PDO transaction-method calls are outside its
-BEGIN/COMMIT SQL counters. Member pages select at most51 rows to derive an explicit continuation;
-player snapshots batch only their bounded group IDs. These are SQL request costs,
-not measured hosted latency or a maximum-throughput guarantee.
+Group JSON stores the canonical metadata and pending entries once. SQL already owns the
+Group UUID and revision, so the versioned JSON omits those duplicates. A request's issuer
+is its requester and is derived; newly created pending entries omit `createdAt`. Every
+unresolved original legacy timestamp remains available unchanged. Memberships remain one
+row per `(group_id,user_id)` with native CHAR36/TEXT PK/FKs and existing role/join ordering.
+Player JSON contains only `{s:1}` plus nonzero `m` membership, `i` invitation and `r`
+request counts. It never stores membership UUID lists or pending payload copies.
+
+| Public limit | Environment key | Default |
+|---|---|---|
+| `maxMembers` | `GROUP_MEMBERS` |500|
+| `maxGroupsPerPlayer` | `GROUP_MEMBERSHIPS` |5|
+| `maxInvitations` | `GROUP_INVITATIONS` |20|
+| `maxJoinRequests` | `GROUP_JOIN_REQUESTS` |20|
+| `maxPlayerInvitations` | `GROUP_PLAYER_INVITATIONS` |2|
+| `maxPlayerRequests` | `GROUP_PLAYER_REQUESTS` |2|
+| `maxDataBytes` | `GROUP_DATA_BYTES` |2048|
+| `memberPageSize` | `GROUP_MEMBER_PAGE_SIZE` |50|
+| `maxNameBytes` | `GROUP_NAME_BYTES` |120|
+| `maxDescriptionBytes` | `GROUP_DESCRIPTION_BYTES` |1024|
+| `maxDataDepth` | `GROUP_DATA_DEPTH` |16|
+
+Schema bootstrap only adds a nullable direction column to the existing participant index,
+its `(user_id,target_kind,group_id)` index and one project migration header. It never
+rewrites historical source/player payloads. Existing legacy snapshots stay readable;
+Group writes require explicit source-index migration first. Stop all old/new writers
+and verify a restorable backup, then inspect/apply bounded pages:
+
+```bash
+php bin/groups.php compact-inspect index 100
+php bin/groups.php compact-apply index 100 --writes-stopped --backup-verified
+php bin/groups.php compact-inspect groups - 100
+php bin/groups.php compact-apply groups - 100 --writes-stopped --backup-verified
+php bin/groups.php compact-inspect players - 100
+php bin/groups.php compact-apply players - 100 --writes-stopped --backup-verified
+```
+
+Repeat index pages until `ready:true`; their cursor is stored in the single header.
+Group and player conversion pages use their returned `nextAfterGroupId` / `nextAfterUserId`. The flags attest operator preparation;
+they do not stop writers or create/check a backup. Every old membership/pending copy
+must match canonical SQL/source identities, original issuer and original timestamp
+exactly before conversion. Missing, unknown or contradictory evidence returns409
+`GROUP_STORAGE_CONFLICT` and keeps that record unchanged. Storage conversion retains
+public revisions. New writes can compact a verified old player in their same transaction.
+
+All user/group/profile bulk queries use explicit batches of200, with no45/80 snapshot
+ceiling or five-row read clamp. Member queries read at most requested limit+1 rows and
+profile lookups split independently, including a351-member page. The focused probes
+`tests/groups.php` and `tests/groups-compact.php` print actual SQL statement counts and
+a ten-member storage scenario. JSON byte lengths and text-column octets are payload
+measurements, separate from actual whole-fixture SQL data/index allocations. Native
+SQL page overhead is not represented as MongoDB BSON or an invented per-row constant.
 
 
 ## Items (self-hosted REST)

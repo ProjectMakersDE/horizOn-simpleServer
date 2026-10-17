@@ -4,6 +4,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/../src/Core/Config.php';
 require_once __DIR__ . '/../src/Core/Database.php';
 require_once __DIR__ . '/../src/Groups/GroupService.php';
+require_once __DIR__ . '/../src/Groups/GroupMigration.php';
 
 $dsn = getenv('HORIZON_GROUPS_TEST_DSN');
 $parts = [];
@@ -45,6 +46,19 @@ try {
     $indexes = $pdo->query($dsn ? 'SHOW INDEX FROM player_groups' : "PRAGMA index_list('player_groups')")->fetchAll(PDO::FETCH_ASSOC);
     if (!in_array('idx_groups_deleted', array_column($indexes, $dsn ? 'Key_name' : 'name'), true))
         throw new RuntimeException('Missing indexed deletion anchor');
+    // Actual previous Group schema: no direction column or migration fence, with meaningful data.
+    $pdo->exec('DROP TABLE group_pending_references');$pdo->exec('DROP TABLE group_storage');
+    $pdo->exec($dsn?'CREATE TABLE group_pending_references(user_id CHAR(36) NOT NULL,group_id CHAR(36) NOT NULL,PRIMARY KEY(user_id,group_id),FOREIGN KEY(group_id) REFERENCES groups_state(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4':'CREATE TABLE group_pending_references(user_id TEXT NOT NULL,group_id TEXT NOT NULL,PRIMARY KEY(user_id,group_id),FOREIGN KEY(group_id) REFERENCES groups_state(id) ON DELETE CASCADE)');
+    $groupId=Database::uuid();$oldGroup=GroupRules::json(['id'=>$groupId,'revision'=>3,'name'=>'Old','description'=>'Original','joinMode'=>'open','dataJson'=>'{"kept":{}}','leaderId'=>$id,'memberCount'=>1,'invitations'=>[],'joinRequests'=>[],'createdAt'=>'2026-01-01T00:00:00.000Z','updatedAt'=>'2026-01-02T00:00:00.000Z']);
+    $oldPlayer=GroupRules::json(['groupIds'=>[$groupId],'incomingInvites'=>[],'outgoingRequests'=>[]]);
+    $pdo->prepare('INSERT INTO groups_state(id,revision,data) VALUES(?,3,?)')->execute([$groupId,$oldGroup]);$pdo->prepare('INSERT INTO group_members(group_id,user_id,role,joined_millis) VALUES(?,?,?,?)')->execute([$groupId,$id,'leader',1767225600000]);$pdo->prepare('INSERT INTO player_groups(user_id,active_user_id,revision,data) VALUES(?,?,9,?)')->execute([$id,$id,$oldPlayer]);
+    Database::migrate();
+    $get=$pdo->prepare('SELECT data FROM groups_state WHERE id=?');$get->execute([$groupId]);if($get->fetchColumn()!==$oldGroup)throw new RuntimeException('Bootstrap rewrote original Group');
+    $get=$pdo->prepare('SELECT data FROM player_groups WHERE user_id=?');$get->execute([$id]);if($get->fetchColumn()!==$oldPlayer||(int)$pdo->query('SELECT ready FROM group_storage WHERE id=1')->fetchColumn()!==0)throw new RuntimeException('Bootstrap compacted old player or falsely marked sources ready');
+    $service=new GroupService($pdo);if(count($service->get($id)['groups'])!==1)throw new RuntimeException('Legacy read blocked before explicit conversion');
+    try{$service->create($id,9,'No','','open',(object)[]);throw new RuntimeException('Write escaped incomplete source-index fence');}catch(GroupFailure $e){if($e->errorCode!=='GROUP_STORAGE_CONFLICT')throw $e;}
+    $migration=new GroupMigration($pdo);if(!$migration->indexPage(10,true)['ready'])throw new RuntimeException('Bounded source index did not finish');$migration->players(null,10,true);
+    $get->execute([$id]);if($get->fetchColumn()!=='{"s":1,"m":1}'||$service->get($id)['revision']!==9)throw new RuntimeException('Verified old membership did not compact without revision reset');
     echo 'PASS: Group legacy ' . ($dsn ? 'MySQL' : 'SQLite') . " bootstrap preserves identity/history, lazy state and cleanup index\n";
 } finally {
     $pdo = null;

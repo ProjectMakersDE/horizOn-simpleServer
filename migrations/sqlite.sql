@@ -279,7 +279,7 @@ CREATE TABLE IF NOT EXISTS group_members (
 CREATE INDEX IF NOT EXISTS idx_group_members_player ON group_members(user_id,group_id);
 CREATE INDEX IF NOT EXISTS idx_group_succession ON group_members(group_id,role,joined_millis,user_id);
 CREATE TABLE IF NOT EXISTS group_pending_references (
-    user_id TEXT NOT NULL, group_id TEXT NOT NULL, PRIMARY KEY(user_id,group_id),
+    user_id TEXT NOT NULL, group_id TEXT NOT NULL, target_kind INTEGER NULL, PRIMARY KEY(user_id,group_id),
     FOREIGN KEY(group_id) REFERENCES groups_state(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_group_pending_group ON group_pending_references(group_id,user_id);
@@ -372,3 +372,6 @@ CREATE TABLE IF NOT EXISTS market_maintenance(kind TEXT PRIMARY KEY,revision INT
 -- Request identity index only, no duplicated pending payload or player list.
 CREATE TABLE IF NOT EXISTS group_inbox_sources(request_id TEXT PRIMARY KEY COLLATE BINARY,group_id TEXT NOT NULL,FOREIGN KEY(group_id) REFERENCES groups_state(id) ON DELETE CASCADE);
 CREATE INDEX IF NOT EXISTS idx_group_inbox_group ON group_inbox_sources(group_id,request_id);
+
+-- One project migration fence; no player/source payload copy.
+CREATE TABLE IF NOT EXISTS group_storage(id INTEGER PRIMARY KEY,revision INTEGER NOT NULL,cursor_group TEXT NULL,ready INTEGER NOT NULL);
