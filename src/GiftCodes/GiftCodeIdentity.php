@@ -18,8 +18,7 @@ class GiftCodeIdentity
         $alias=$gift['v2_id']??null;
         try{$original=GiftCodeProtocol::uuid($gift['id']);}catch(GiftCodesFailure $e){$original=null;}
         if($original!==null&&$gift['id']!==$original)GiftCodeProtocol::fail('MIGRATION_REQUIRED','Noncanonical original UUID requires explicit recovery');
-        if($alias!==null){$uuid=self::fromBytes($alias);if($original!==null&&$sourceId!==$original)GiftCodeProtocol::fail('MIGRATION_REQUIRED','Noncanonical original UUID requires explicit recovery');
-        if($original!==null&&$uuid!==$original)GiftCodeProtocol::fail('MIGRATION_REQUIRED','UUID identity was retargeted');return$uuid;}
+        if($alias!==null){if($original!==null)GiftCodeProtocol::fail('MIGRATION_REQUIRED','Regular UUID has an unexpected alias');return self::fromBytes($alias);}
         if($original!==null&&$gift['id']===$original)return$original;
         GiftCodeProtocol::fail('MIGRATION_REQUIRED','Legacy identity requires a sealed UUID mapping');
     }
@@ -36,6 +35,7 @@ class GiftCodeIdentity
     {
         $this->available($uuid,$sourceId);$uuid=GiftCodeProtocol::uuid($uuid);
         try{$original=GiftCodeProtocol::uuid($sourceId);}catch(GiftCodesFailure $e){$original=null;}
+        if($original!==null&&$sourceId!==$original)GiftCodeProtocol::fail('MIGRATION_REQUIRED','Noncanonical original UUID requires explicit recovery');
         if($original!==null&&$uuid!==$original)GiftCodeProtocol::fail('MIGRATION_REQUIRED','Existing UUID cannot be reassigned');
         $q=$this->pdo->prepare('SELECT v2_id FROM gift_codes WHERE id=?'.($this->mysql?' FOR UPDATE':''));$q->execute([$sourceId]);$row=$q->fetch(PDO::FETCH_ASSOC);$q->closeCursor();if($row===false)GiftCodeProtocol::fail('MIGRATION_REQUIRED','Missing original campaign');
         if($sourceId===$uuid){if($row['v2_id']!==null)GiftCodeProtocol::fail('MIGRATION_REQUIRED','Regular UUID has an unexpected alias');return;}

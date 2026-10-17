@@ -102,6 +102,9 @@ try{
     giftV2Check(1,$assigned,'exactly one sealed alias');giftV2Check(1,$conflicted,'other identity writer cannot retarget');
     giftV2Reject('STATE_CONFLICT',static function()use($scope,$p,$candidate){$scope->run(static function()use($scope,$p,$candidate){(new GiftCodeIdentity($p,$scope))->available($candidate);});});
     $natural=$created['id'];giftV2Reject('STATE_CONFLICT',static function()use($scope,$p,$natural,$ids){$scope->run(static function()use($scope,$p,$natural,$ids){(new GiftCodeIdentity($p,$scope))->assign($ids[1],$natural);});});
+    $warnings=[];set_error_handler(static function($severity,$message)use(&$warnings){$warnings[]=$message;return true;},E_WARNING|E_NOTICE);
+    try{foreach([$created['id'],Database::uuid()]as$aliasId)giftV2Reject('MIGRATION_REQUIRED',static function()use($created,$aliasId){GiftCodeIdentity::canonical(['id'=>$created['id'],'v2_id'=>GiftCodeProtocol::binary($aliasId)]);});}finally{restore_error_handler();}
+    giftV2Check([],$warnings,'redundant or retargeted canonical UUID alias fails without warnings');
     $retired=Database::uuid();$scope->run(static function()use($scope,$p,$retired,$user){(new GiftCodeCounterStore($p,$scope))->install($retired,$user,1);});
     giftV2Reject('STATE_CONFLICT',static function()use($scope,$p,$retired){$scope->run(static function()use($scope,$p,$retired){(new GiftCodeIdentity($p,$scope))->available($retired);});});
     $row=$p->query('SELECT LENGTH(campaign_id) a,LENGTH(player_id) b FROM gift_code_counts LIMIT 1')->fetch();giftV2Check(16,(int)$row['a'],'actual binary campaign length');giftV2Check(16,(int)$row['b'],'actual binary player length');
