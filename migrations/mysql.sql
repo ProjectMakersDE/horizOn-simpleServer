@@ -70,7 +70,13 @@ CREATE TABLE IF NOT EXISTS gift_codes (
     reward_data TEXT,
     values_json TEXT,
     max_redemptions INT NOT NULL DEFAULT 1,
-    current_redemptions INT NOT NULL DEFAULT 0,
+    current_redemptions BIGINT NOT NULL DEFAULT 0,
+    v2_id BINARY(16),
+    protocol_version TINYINT NOT NULL DEFAULT 2,
+    config_revision BIGINT NOT NULL DEFAULT 1,
+    max_per_user INT DEFAULT 1,
+    unlimited_total TINYINT NOT NULL DEFAULT 0,
+    migration_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
     expires_at DATETIME,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -88,6 +94,18 @@ CREATE TABLE IF NOT EXISTS gift_code_redemptions (
     FOREIGN KEY (user_id) REFERENCES users(id),
     UNIQUE KEY unique_redemption (gift_code_id, user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- One constant row serializes explicit campaign identity creation/migration, never player state.
+CREATE TABLE IF NOT EXISTS gift_code_identity_lock (id TINYINT PRIMARY KEY);
+
+-- Permanent compact source guard; intentionally survives campaign/user row deletion.
+CREATE TABLE IF NOT EXISTS gift_code_counts (
+    campaign_id BINARY(16) NOT NULL,
+    player_id BINARY(16) NOT NULL,
+    count BIGINT NOT NULL,
+    PRIMARY KEY(campaign_id,player_id),
+    CHECK(count>=0)
+) ENGINE=InnoDB;
 
 -- Player profile cosmetics catalog (one per installation), filled by SQL.
 -- cosmetic_id: 1 to 32 characters a-z 0-9 . _ - (starts with a letter or digit)
