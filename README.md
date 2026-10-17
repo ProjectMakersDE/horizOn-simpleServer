@@ -1774,20 +1774,30 @@ Actual PHP7.4/MySQL/CI outcomes are recorded separately from local execution.
 
 Measured service statement counts exclude existing HTTP authentication, rate
 limiting and schema/bootstrap. SQLite point GET is3 SELECT/0 DML, open search
-4/0, create with one invite5/4, start including Inbox delivery8/3, an ordinary
-turn including delivery6/4 and immutable report3/1. Writes also begin/commit each
+4/0, create with one invite5/4, start including Inbox delivery9/3, an ordinary
+turn including delivery7/4 and immutable report3/1. Writes also begin/commit each
 scope; an Inbox handoff adds its separate scope. PDO transaction-method calls are
 not SQL statement counts. Block checks are bounded by256 candidates with up to8
 participants each, each existing block list under its Friends contract. These are bounded
 statement/row envelopes, not latency, maximum capacity or hosted throughput claims.
 The actual MySQL8.4 profiles are point3 SELECT/0 DML, open search4/0, create with
-one invite8/4, start including Inbox10/3, ordinary turn including Inbox8/4 and
+one invite8/4, start including Inbox11/3, ordinary turn including Inbox9/4 and
 report4/1. Read snapshots additionally set their next transaction's isolation;
 row-lock/current-version checks explain the extra mutation reads. The10k-row
 MySQL seek probes visit256 open candidates or20 due rows; a deliberately
 non-indexable ID negative control, with index-condition pushdown disabled only
 for its measurement, visits9257/9021 rows. Runtime/fixture limits are not changed
 by this diagnostic. Both drivers retain the same hard candidate budgets.
+
+Both actual SQL drivers store the measured two-player header in231 JSON bytes and its two
+three-byte original reports in78 JSON bytes (46 packed bytes). Converting the same legacy lobby
+and player row changes their JSON total1391→141 bytes; paired game bytes and existing SQL keys,
+projections and indexes remain separate. SQLite's aggregate table-cell payload falls by1251 bytes
+for that conversion; allocated database pages and InnoDB tables are not claimed to shrink.
+The player-frame test admits65506 bytes, reserves65514 for all eventual closed edges and actually
+completes at65514. A further65526-byte open form is refused before DML because its eventual
+closed form needs65550. Native PHP7.4 repeats the large escaped JSON/duplicate-key, actual payload
+65535/65536, oversized SQLite preservation and full lifecycle cases under128MiB.
 
 
 ## Chat is hosted-only (TASK-1014)
