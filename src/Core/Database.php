@@ -53,6 +53,8 @@ class Database
 
         $sql = file_get_contents($file);
         $pdo->exec($sql);
+        require_once __DIR__ . '/../SharedObjects/SharedObjectSchema.php';
+        SharedObjectSchema::ensure($pdo);
         self::ensurePlayerValuesConfig($pdo);
         self::ensureStatisticsConfig($pdo);
         self::ensureInboxConfig($pdo);

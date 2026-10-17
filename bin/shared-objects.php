@@ -9,7 +9,7 @@ require_once __DIR__.'/../src/SharedObjects/TrustedNoticeService.php';
 try{
     chdir(dirname(__DIR__));Config::load('.env');Database::migrate();$pdo=Database::connect();$scope=new SqlTransaction($pdo);$service=new SharedObjectService($pdo,null,$scope);
     $command=$argv[1]??'limits';$revision=static function($index)use($argv){return SharedObjectRules::revision($argv[$index]??null);};$key=static function()use($argv){return SharedObjectRules::key($argv[2]??null);};
-    $input=static function(){return SharedObjectRules::decode(stream_get_contents(STDIN,100001));};
+    $input=static function(){return SharedObjectRules::decode(stream_get_contents(STDIN,1500001));};
     switch($command){
         case 'collections':$result=$service->collections(null,$argv[2]??null,50,isset($argv[3])?$revision(3):null);break;
         case 'put':$result=$service->put($key(),$revision(3),$input());break;

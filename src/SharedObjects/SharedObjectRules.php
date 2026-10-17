@@ -24,7 +24,7 @@ class SharedObjectRules
     { if($value instanceof stdClass)$value=get_object_vars($value);if(!is_array($value)||array_diff(array_keys($value),$allowed))self::invalid();return $value; }
     public static function json($value): string { return json_encode($value,JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES); }
     public static function decode(string $raw): stdClass
-    { try{return ItemJson::decode($raw,100000);}catch(ItemFailure $error){self::invalid();} }
+    { try{return ItemJson::decode($raw,1500000);}catch(ItemFailure $error){self::invalid();} }
     public static function revision($header): int
     {
         if(!is_string($header))self::invalid();
@@ -42,7 +42,7 @@ class SharedObjectRules
         $search=$in['searchFields']??null;if(!is_array($search)||count($search)>3||($search&&array_keys($search)!==range(0,count($search)-1)))self::invalid();
         $fields=[];$seen=[];foreach($search as $entry){$entry=self::fields($entry,['key','type']);$key=self::key($entry['key']??null);$type=$entry['type']??null;if(isset($seen[$key])||!in_array($type,['integer','string'],true))self::invalid();$seen[$key]=true;$fields[]=['key'=>$key,'type'=>$type];}
         return ['name'=>self::text($in['name']??null,120,true),'active'=>self::boolean($in['active']??null),'readPolicy'=>$read,'writePolicy'=>$write,
-            'maxObjectBytes'=>self::integer($in['maxObjectBytes']??null,1,$limits['objectBytes']),'maxObjectsPerOwner'=>self::integer($in['maxObjectsPerOwner']??null,1,100),
+            'maxObjectBytes'=>self::integer($in['maxObjectBytes']??null,1,$limits['objectBytes']),'maxObjectsPerOwner'=>self::integer($in['maxObjectsPerOwner']??null,1,2147483647),
             'ttlSeconds'=>$ttl,'searchFields'=>$fields,'positionEnabled'=>self::boolean($in['positionEnabled']??null)];
     }
     public static function schema(array $definition): array { return array_intersect_key($definition,array_flip(['readPolicy','writePolicy','ttlSeconds','searchFields','positionEnabled'])); }
