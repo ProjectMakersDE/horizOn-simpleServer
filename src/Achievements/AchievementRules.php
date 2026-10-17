@@ -60,7 +60,7 @@ class AchievementRules
             }
             $rewards=array_key_exists('rewards',$row)?$row['rewards']:['values'=>[]];
             if(!is_array($rewards)||array_diff(array_keys($rewards),['values']))self::invalid('Only value rewards are supported');
-            $amounts=PlayerValuesLedger::list($rewards['values']??[],8);$unique=[];$normalized=[];
+            $amounts=PlayerValuesLedger::list(array_key_exists('values',$rewards)?$rewards['values']:[],8);$unique=[];$normalized=[];
             foreach($amounts as $value){
                 if(!is_array($value))self::invalid('Invalid value reward');
                 $valueKey=PlayerValuesLedger::key($value['key']??null);$amount=PlayerValuesLedger::integer($value['amount']??null,1);

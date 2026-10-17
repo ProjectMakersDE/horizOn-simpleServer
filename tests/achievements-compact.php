@@ -19,6 +19,7 @@ try{
  $service=new AchievementService($pdo,$clock);$migration=new AchievementMigration($pdo,$clock);$values=new PlayerValuesService($pdo,$clock);$inbox=new InboxService($pdo,$clock);
  $values->configure(['definitions'=>[['key'=>'coins','name'=>'Coins','maxBalance'=>1000]],'offers'=>[]],0);
  $make=static function(string $key,int $amount=2){return ['key'=>$key,'name'=>$key,'mode'=>'manual','rewards'=>['values'=>[['key'=>'coins','amount'=>$amount]]]];};
+ $bad=$make('bad');$bad['rewards']['values']=null;fails('INVALID_REQUEST',static function()use($service,$bad){$service->configure([$bad],0);});
  $service->configure([$make('old',99),$make('second'),$make('new')],0);
  $user=static function()use($pdo,$now){$id=Database::uuid();$pdo->prepare('INSERT INTO users(id,display_name,anonymous_token,created_at,created_at_millis) VALUES(?,?,?,?,?)')->execute([$id,'Fixture',Database::uuid(),'2026-10-16 12:00:00',$now]);return $id;};
  $raw=static function(string $id)use($pdo){$q=$pdo->prepare('SELECT data FROM achievement_state WHERE user_id=?');$q->execute([$id]);return $q->fetchColumn();};
