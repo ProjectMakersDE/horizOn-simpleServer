@@ -7,59 +7,36 @@ trait MatchMaintenance
 {
     public function cleanup(string $kind = 'admin'): array
     {
-        if (!in_array($kind, ['admin', 'scheduled'], true)) MatchRules::invalid();
-        $cursor = $this->atomic(function () use ($kind) {
-            return $this->store->maintenance($kind, $this->now(), true);
-        });
-        if ($cursor['afterId'] === null) $cursor['cutoff'] = $this->now();
-        $rows = $this->snapshot(function () use ($cursor) { return $this->store->due($cursor); });
-        $result = ['examined'=>count($rows), 'advanced'=>0, 'notified'=>0, 'removed'=>0, 'deferred'=>0];
-        foreach ($rows as $row) {
-            try {
-                $outcome = $this->atomic(function () use ($row) {
-                    $old = $this->store->get($row['id'], true);
-                    if ($old === null || $old['revision'] !== (int)$row['revision']) return ['kind'=>'unchanged','pending'=>false];
-                    $now = $this->now();
-                    if ($old['purgeAt'] !== null && $old['purgeAt'] <= $now) {
-                        $this->updateLedgers($old, null);
-                        $this->store->remove($old);
-                        return ['kind'=>'removed','pending'=>false];
-                    }
-                    $next = $old;
-                    if ($old['status'] === 'lobby' && $old['lobbyDeadline'] <= $now) $next = MatchTransitions::close($old, 'cancelled', $now);
-                    elseif ($old['status'] === 'active' && $old['absoluteDeadline'] <= $now) $next = MatchTransitions::close($old, 'unconfirmed', $now);
-                    elseif ($old['status'] === 'active' && $old['turnDeadline'] <= $now) $next = MatchTransitions::timeout($old, $now);
-                    elseif ($old['status'] === 'reporting' && $old['reportDeadline'] <= $now) $next = MatchTransitions::close($old, 'unconfirmed', $now);
-                    $changed = $next !== $old;
-                    if ($changed) $this->persist($old, $next);
-                    return ['kind'=>$changed?'advanced':'unchanged', 'pending'=>$next['notice'] !== null];
-                });
-                if ($outcome['kind'] === 'removed') $result['removed']++;
-                if ($outcome['kind'] === 'advanced') $result['advanced']++;
-                if ($outcome['pending']) {
-                    if ($this->deliverNotice($row['id'])) $result['notified']++;
-                    else $result['deferred']++;
-                }
-            } catch (Throwable $e) {
-                $result['deferred']++;
-                error_log('Match cleanup deferred: '.get_class($e));
+        if(!in_array($kind,['admin','scheduled'],true))MatchRules::invalid();
+        $rotation=$this->atomic(function()use($kind){return $this->store->maintenance($kind.':r',$this->now(),true);});$first=$rotation['afterDue']??0;
+        $result=['examined'=>0,'advanced'=>0,'notified'=>0,'removed'=>0,'deferred'=>0];$budget=20;
+        foreach([$first,1-$first] as $path){if($budget===0)break;$pathBudget=$budget;$key=$path===0?$kind:$kind.':h';$cursor=$this->atomic(function()use($key){return $this->store->maintenance($key,$this->now(),true);});
+            if($path===0){if($cursor['afterId']===null)$cursor['cutoff']=$this->now();$rows=$this->snapshot(function()use($cursor,$budget){return $this->store->dueBounded($cursor,$budget);});$page=null;}
+            else{$page=$this->snapshot(function()use($cursor,$budget){return $this->store->historyPage($cursor,$budget);});$rows=$page['rows'];}
+            foreach($rows as $row){$result['examined']++;$budget--;
+                try{$outcome=$this->atomic(function()use($row,$path){$old=$this->store->get($row['id'],true);if($old===null||$old['revision']!==MatchStorage::sqlNumber($row['revision']))return ['kind'=>'unchanged','pending'=>false];$now=$this->now();
+                    $remove=$old['purgeAt']!==null&&$old['purgeAt']<=$now;
+                    if($path===1&&!$remove){if(!in_array($old['status'],MatchRules::TERMINAL,true))return ['kind'=>'unchanged','pending'=>false];$remove=$this->cap['retainedMatches']===0||$old['finishedAt']+$this->cap['historyRetentionSeconds']*1000<=$now;
+                        if(!$remove)foreach($old['participantIds'] as $user){$p=$this->store->player($user,true);if(count($p['closedIds'])>$this->cap['retainedMatches']){$times=$p['closedAt'];asort($times,SORT_NUMERIC);$excess=count($p['closedIds'])-$this->cap['retainedMatches'];if(in_array($old['id'],array_slice(array_keys($times),0,$excess),true)){$remove=true;break;}}}}
+                    if($remove){$this->updateLedgers($old,null);$this->store->remove($old);return ['kind'=>'removed','pending'=>false];}
+                    if($path===1)return ['kind'=>'unchanged','pending'=>false];$next=$old;
+                    if($old['status']==='lobby'&&$old['lobbyDeadline']<=$now)$next=MatchTransitions::close($old,'cancelled',$now);
+                    elseif($old['status']==='active'&&$old['absoluteDeadline']<=$now)$next=MatchTransitions::close($old,'unconfirmed',$now);
+                    elseif($old['status']==='active'&&$old['turnDeadline']<=$now)$next=MatchTransitions::timeout($old,$now);
+                    elseif($old['status']==='reporting'&&$old['reportDeadline']<=$now)$next=MatchTransitions::close($old,'unconfirmed',$now);
+                    $changed=$next!==$old;if($changed)$next=$this->persist($old,$next);return ['kind'=>$changed?'advanced':'unchanged','pending'=>$next['notice']!==null];
+                });if($outcome['kind']==='removed')$result['removed']++;if($outcome['kind']==='advanced')$result['advanced']++;if($outcome['pending']){if($this->deliverNotice($row['id']))$result['notified']++;else$result['deferred']++;}}
+                catch(Throwable $e){$result['deferred']++;error_log('Match cleanup deferred: '.get_class($e));}
             }
+            $next=$cursor;if($path===1){$next['afterDue']=$page['afterDue'];$next['afterId']=$page['afterId'];}
+            elseif(count($rows)===$pathBudget){$last=$rows[count($rows)-1];$next['afterDue']=(int)$last['due_millis'];$next['afterId']=$last['id'];}
+            else{$next['cutoff']=$this->now();$next['afterDue']=null;$next['afterId']=null;}
+            $this->atomic(function()use($key,$cursor,$next){$this->store->saveMaintenance($key,$cursor,$next);});
         }
-        $next = $cursor;
-        if (count($rows) === 20) {
-            $last = $rows[count($rows)-1];
-            $next['afterDue'] = (int)$last['due_millis'];
-            $next['afterId'] = $last['id'];
-        } else {
-            $next['cutoff'] = $this->now();
-            $next['afterDue'] = null;
-            $next['afterId'] = null;
-        }
-        $this->atomic(function () use ($kind, $cursor, $next) { $this->store->saveMaintenance($kind, $cursor, $next); });
-        return $result + ['serverTime'=>MatchRules::instant($this->now())];
+        $this->atomic(function()use($kind,$rotation,$first){$next=$rotation;$next['afterDue']=1-$first;$this->store->saveMaintenance($kind.':r',$rotation,$next);});return $result+['serverTime'=>MatchRules::instant($this->now())];
     }
 
-    /** A deleted identity has at most120 retained/invited references, resumed in20-row steps. */
+    /** Deleted identities resume their actual retained/invited references in20-row steps. */
     public function cleanupDeletedPlayer(string $user): array
     {
         $user = MatchRules::uuid($user);

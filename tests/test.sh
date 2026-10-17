@@ -1122,6 +1122,7 @@ if python3 tests/shared-objects-seek.py; then PASS=$((PASS + 1)); else FAIL=$((F
 if php tests/chat-http.php "$BASE_URL" "$API_KEY" "$USER_ID" "$SESSION_TOKEN"; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); fi
 if php tests/matches-http.php "$BASE_URL" "$API_KEY"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 if php tests/matches.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/matches-compact.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 if php tests/matches-migration.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 if python3 tests/matches-seek.py; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 if php tests/marketplace-http.php "$BASE_URL" "$API_KEY"; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); fi
