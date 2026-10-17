@@ -1025,10 +1025,11 @@ ACH_VERSION=$(php -r 'echo json_decode($argv[1],true)["achievements"]["definitio
 ACH_SAME=$(curl -s "$BASE_URL/achievements?userId=$USER_ID&definitionVersion=$ACH_VERSION" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN")
 assert_contains 'achievement player-visible metadata version can match' '"definitions":null' "$ACH_SAME"
 ACH_DRAIN=$(curl -s "$BASE_URL/achievements/rewards/deliver" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "{\"userId\":\"$USER_ID\",\"keys\":[\"manual-secret\"]}")
-assert_contains 'explicit bounded delivery result for no-reward guard' '"state":"none"' "$ACH_DRAIN"
+assert_contains 'compact no-reward unlock already complete' '"state":"complete"' "$ACH_DRAIN"
 ACH_ADMIN=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$TEST_PORT/api/v1/admin/achievements/definitions" -H "X-API-Key: $API_KEY")
 assert_status 'achievement operator configuration not exposed as app admin' 404 "$ACH_ADMIN"
 if php tests/achievements.php; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); fi
+if php tests/achievements-compact.php; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); fi
 if php tests/achievements-migration.php; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); fi
 
 # ---- Inbox REST parity ----

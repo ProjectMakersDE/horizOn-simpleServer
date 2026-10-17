@@ -32,9 +32,9 @@ class AchievementRules
         return InboxRules::content(['type'=>'achievement','reference'=>$definition['key'],'textKey'=>'horizon.achievement.unlocked',
             'parameters'=>['key'=>$definition['key']],'expiresAt'=>InboxRules::instant($issued+InboxRules::RETENTION),'attachment'=>$definition['rewards']]);
     }
-    public static function definitions($rows,array $previous,array $statistics,array $values,int $now):array
+    public static function definitions($rows,array $previous,array $statistics,array $values,int $now,int $activeLimit=self::ACTIVE,int $lifetimeLimit=self::LIFETIME):array
     {
-        if(!is_array($rows)||count($rows)>self::LIFETIME||($rows!==[]&&array_keys($rows)!==range(0,count($rows)-1)))self::invalid('Provide at most500 definitions');
+        if(!is_array($rows)||strlen(InboxRules::json($rows))>1024*1024||($rows!==[]&&array_keys($rows)!==range(0,count($rows)-1)))self::invalid('Provide a bounded definition list');
         $known=$previous['lifetimeKeys'];$seen=[];$active=0;$next=[];
         foreach($rows as $row){
             if(!is_array($row))self::invalid('Definition must be an object');
@@ -60,15 +60,20 @@ class AchievementRules
             }
             $rewards=array_key_exists('rewards',$row)?$row['rewards']:['values'=>[]];
             if(!is_array($rewards)||array_diff(array_keys($rewards),['values']))self::invalid('Only value rewards are supported');
-            $content=InboxRules::content(['type'=>'achievement','textKey'=>'horizon.achievement.unlocked','expiresAt'=>InboxRules::instant($now+InboxRules::RETENTION),'attachment'=>$rewards]);
-            $rewards=$content['attachment'];
+            $amounts=PlayerValuesLedger::list(array_key_exists('values',$rewards)?$rewards['values']:[],8);$unique=[];$normalized=[];
+            foreach($amounts as $value){
+                if(!is_array($value))self::invalid('Invalid value reward');
+                $valueKey=PlayerValuesLedger::key($value['key']??null);$amount=PlayerValuesLedger::integer($value['amount']??null,1);
+                if(isset($unique[$valueKey]))self::invalid('Duplicate value reward');$unique[$valueKey]=true;
+                $normalized[]=['key'=>$valueKey,'amount'=>$amount];
+            }
+            usort($normalized,static function($a,$b){return strcmp($a['key'],$b['key']);});$rewards=['values'=>$normalized];
             foreach($rewards['values']as$value)if(!isset($values[$value['key']])||$value['amount']>$values[$value['key']]['maxBalance'])self::fail('UNKNOWN_VALUE','Reward must fit a configured maximum balance',422);
             $definition=['key'=>$key,'name'=>$name,'description'=>$description,'imageUrl'=>$image,'hidden'=>$hidden,'active'=>$enabled,'mode'=>$mode,'condition'=>$condition,'rewards'=>$rewards];
-            if($rewards['values'])InboxRules::validate(self::content($definition,$now),$now);
             $next[]=$definition;if(!in_array($key,$known,true))$known[]=$key;
         }
-        if($active>self::ACTIVE)self::fail('ACHIEVEMENT_LIMIT_REACHED','Active definition limit reached',403);
-        if(count($known)>self::LIFETIME)self::fail('ACHIEVEMENT_LIFETIME_LIMIT_REACHED','Lifetime key limit reached');
+        if($active>$activeLimit && $active>count(array_filter($previous['definitions'],static function($row){return $row['active'];})))self::fail('ACHIEVEMENT_LIMIT_REACHED','Active definition limit reached',403);
+        if(count($known)>$lifetimeLimit && count($known)>count($previous['lifetimeKeys']))self::fail('ACHIEVEMENT_LIFETIME_LIMIT_REACHED','Lifetime key limit reached');
         $catalog=['projectId'=>$previous['projectId'],'revision'=>$previous['revision'],'definitions'=>$next,'lifetimeKeys'=>$known];
         if(strlen(InboxRules::json($catalog))>1024*1024)self::invalid('Catalogue exceeds1MiB');
         return $catalog;
