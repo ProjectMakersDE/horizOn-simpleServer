@@ -248,7 +248,7 @@ CREATE TABLE IF NOT EXISTS statistics_state (
 
 -- Bounded JSON rows may exceed64KiB at500 broadcasts/markers.
 CREATE TABLE IF NOT EXISTS inbox_catalog (id INT PRIMARY KEY, data MEDIUMTEXT NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-CREATE TABLE IF NOT EXISTS inbox_state (user_id CHAR(36) PRIMARY KEY, data MEDIUMTEXT NOT NULL,
+CREATE TABLE IF NOT EXISTS inbox_state (user_id CHAR(36) PRIMARY KEY, data MEDIUMTEXT NOT NULL,next_expiry BIGINT NULL,INDEX idx_inbox_expiry(next_expiry,user_id),
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Nullable active pointers and reverse references retain bounded/resumable deletion anchors.
@@ -351,9 +351,12 @@ CREATE TABLE IF NOT EXISTS market_listings(id CHAR(36) CHARACTER SET ascii COLLA
  status VARCHAR(24) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,item_key VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
  price BIGINT NOT NULL,created_millis BIGINT NOT NULL,due_kind INT NOT NULL,due_millis BIGINT NOT NULL,return_owner CHAR(36) NOT NULL,
  create_actor CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,create_operation CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,
- close_actor CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,close_operation CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,data TEXT NOT NULL,
+ close_actor CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,close_operation CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,return_entry VARCHAR(46) CHARACTER SET ascii COLLATE ascii_bin NULL,INDEX idx_market_inbox_return(return_owner,return_entry),data TEXT NOT NULL,
  INDEX idx_market_price(status,price,id),INDEX idx_market_item_price(status,item_key,price,id),INDEX idx_market_admin(created_millis,id),
  INDEX idx_market_admin_status(status,created_millis,id),INDEX idx_market_due(due_kind,due_millis,id),INDEX idx_market_owner(return_owner,id),
  UNIQUE INDEX idx_market_create_operation(create_actor,create_operation),UNIQUE INDEX idx_market_close_operation(close_actor,close_operation)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS market_maintenance(kind VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY,revision BIGINT NOT NULL,data TEXT NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Request identity index only, no duplicated pending payload or player list.
+CREATE TABLE IF NOT EXISTS group_inbox_sources(request_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY,group_id CHAR(36) NOT NULL,INDEX idx_group_inbox_group(group_id,request_id),FOREIGN KEY(group_id) REFERENCES groups_state(id) ON DELETE CASCADE) ENGINE=InnoDB;

@@ -1,6 +1,7 @@
 <?php
 
 declare(strict_types=1);
+require_once __DIR__.'/inbox-fixtures.php';
 require_once __DIR__.'/../src/Core/Database.php';
 require_once __DIR__.'/../src/Achievements/AchievementService.php';
 require_once __DIR__.'/../src/Inbox/InboxService.php';
@@ -67,7 +68,7 @@ try{
     $rows[]=$definition('manual',true,2);$service->configure($rows,2);
     $pdo->progressReads=0;$unrelated=$service->report($user,$op(),[['key'=>'rounds','value'=>1]]);check([],$unrelated['newlyUnlocked'],'unrelated stats do not unlock');check(0,$pdo->progressReads,'unaffected report avoids progress read');
     $content=['type'=>'fixture','textKey'=>'fixture','expiresAt'=>InboxRules::instant($now+InboxRules::RETENTION),'attachment'=>['values'=>[['key'=>'coins','amount'=>1]]]];
-    for($i=0;$i<50;$i++)$inbox->deliver($user,$content,'capacity-'.$i,$now,'fixture');
+    fillInboxFixture($pdo,$user,$now);
     $original=$op();$reported=$service->report($user,$original,[['key'=>'kills','value'=>1]]);check(20,count($reported['newlyUnlocked']),'twenty unlocks commit despite full inbox');check(1,array_column($stats->get($user)['values'],null,'key')['kills']['value'],'stats still committed');
     $pending=$service->get($user);check(21,count(array_filter($pending['progress'],static function($row){return $row['rewardState']==='complete';})),'all unlocks complete atomically');
     check(1,$pending['progress'][0]['key']==='hidden'?1:0,'older guard preserved');

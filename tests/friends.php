@@ -1,6 +1,7 @@
 <?php
 
 declare(strict_types=1);
+require_once __DIR__.'/inbox-fixtures.php';
 require_once __DIR__ . '/../src/Core/Database.php';
 require_once __DIR__ . '/../src/Friends/FriendsService.php';
 
@@ -78,7 +79,7 @@ try {
     check($accepted['friends'][0]['since'], $service->get($b)['friends'][0]['since'], 'Identical friendship time');
     check(InboxRules::instant($now - 1000), $accepted['friends'][0]['lastActiveAt'], 'Latest known login, not HTTP activity');
     check([], $accepted['incoming'], 'Crossed incoming consumed'); check([], $accepted['outgoing'], 'Crossed outgoing consumed');
-    check(2, count($inbox->get($b)['entries']), 'Sender confirmation atomically delivered');
+    check(1, count($inbox->get($b)['entries']), 'Accepted confirmation remains; resolved request disappears');check('friend_accept',$inbox->get($b)['entries'][0]['type'],'Authoritative accepted notice');
     $removed = $service->change('remove', $a, $b, 3); check([], $removed['friends'], 'Remove actor friendship'); check([], $service->get($b)['friends'], 'Remove peer friendship');
     $blocked = $service->change('block', $a, $b, 4); check(true, $service->blocked($a, $b), 'Shared bilateral block policy'); check(true, $service->blocked($b, $a), 'Either block direction applies');
     reject('RELATIONSHIP_NOT_ALLOWED', static function () use ($service, $b, $a) { $service->change('request', $b, $a, 4); });
@@ -95,13 +96,13 @@ try {
     reject('FRIEND_LIMIT_REACHED', static function () use ($limited, $c, $d, $toC) { $limited->change('accept', $c, $d, 7, $toC['outgoing'][0]['requestId']); });
     check(1, count($limited->get($c)['friends']), 'Capacity refusal retains existing friend'); check(1, count($service->get($c)['incoming']), 'Capacity refusal retains pending request');
     $content = ['type' => 'fixture', 'textKey' => 'fixture', 'expiresAt' => InboxRules::instant($now + InboxRules::RETENTION)];
-    for ($i = 0; $i < 50; $i++) $inbox->deliver($full, $content, 'full-' . $i, $now, 'fixture');
+    fillInboxFixture($pdo,$full,$now);
     reject('INBOX_FULL', static function () use ($service, $rollback, $full) { $service->change('request', $rollback, $full, 0); });
     check(0, $service->get($rollback)['revision'], 'Full Inbox rolls first CAS back'); check(0, $service->get($full)['revision'], 'Full Inbox rolls second CAS back'); check(50, count($inbox->get($full)['entries']), 'Existing Inbox preserved');
     $acceptSender = $create(); $acceptReceiver = $create();
     $acceptPending = $service->change('request', $acceptSender, $acceptReceiver, 0);
     $acceptId = $acceptPending['outgoing'][0]['requestId'];
-    for ($i = 0; $i < 50; $i++) $inbox->deliver($acceptSender, $content, 'accept-full-' . $i, $now, 'fixture');
+    fillInboxFixture($pdo,$acceptSender,$now);
     reject('INBOX_FULL', static function () use ($service, $acceptSender, $acceptReceiver, $acceptId) { $service->change('accept', $acceptReceiver, $acceptSender, 1, $acceptId); });
     check(1, $service->get($acceptReceiver)['revision'], 'Full confirmation Inbox rolls accepting revision back');
     check($acceptId, $service->get($acceptReceiver)['incoming'][0]['requestId'], 'Failed acceptance retains exact incoming intent');
@@ -121,7 +122,7 @@ try {
     catch (PDOException $expected) {} catch (FriendsFailure $expected) { check('REVISION_CONFLICT', $expected->errorCode, 'Safe SQLite injected failure'); }
     $pdo->exec('DROP TRIGGER friends_failure'); check(0, $service->get($rollback)['revision'], 'Second CAS failure rolls actor insert back'); check(0, $service->get($second)['revision'], 'Failed counterpart insert absent');
     $scope = new SqlTransaction($pdo); $joined = new FriendsService($pdo, $clock, $scope); $joinedInbox = new InboxService($pdo, $clock, $scope);
-    try { $scope->run(static function () use ($joined, $joinedInbox, $outer, $outerPeer, $content, &$now) { $joined->change('block', $outer, $outerPeer, 0); $joinedInbox->deliver($outerPeer, $content, 'outer-fixture', $now, 'fixture'); throw new RuntimeException('outer rollback'); }); }
+    try { $scope->run(static function () use ($joined, $joinedInbox, $outer, $outerPeer, $content, &$now) { $joined->change('block', $outer, $outerPeer, 0); $joinedInbox->freeText($outerPeer,Database::uuid(),0,$now,$now+60000,'outer rollback'); throw new RuntimeException('outer rollback'); }); }
     catch (RuntimeException $expected) {}
     check(0, $service->get($outer)['revision'], 'Shared caller scope rolls actor back'); check([], $inbox->get($outerPeer)['entries'], 'Same PDO rolls other repository back');
     $pdo->loseCommit = true; reject('REVISION_CONFLICT', static function () use ($service, $uncertain, $uncertainPeer) { $service->change('request', $uncertain, $uncertainPeer, 0); });

@@ -1066,7 +1066,7 @@ assert_contains 'empty inbox counts are JSON object' '"counts":{}' "$INB_EMPTY"
 INB_LONG_SINCE=$(php -r 'echo str_repeat("x",129);')
 INB_BAD_SINCE=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/inbox?userId=$USER_ID&since=$INB_LONG_SINCE" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN")
 assert_status 'inbox rejects oversized since' 400 "$INB_BAD_SINCE"
-INB_MESSAGE=$(php -r 'require "src/Core/Config.php"; require "src/Core/Database.php"; require "src/Inbox/InboxService.php"; Config::load(".env"); $n=Database::nowMillis(); $r=(new InboxService(Database::connect()))->deliver($argv[1],["type"=>"turn","textKey"=>"turn.ready","expiresAt"=>InboxRules::instant($n+60000)],"http-turn",$n,"http-test");echo $r["entryId"];' "$USER_ID")
+INB_MESSAGE=$(php -r 'require "src/Core/Config.php"; require "src/Core/Database.php"; require "src/Inbox/InboxService.php"; Config::load(".env"); $n=Database::nowMillis(); $s=new InboxService(Database::connect()); $r=$s->freeText($argv[1],Database::uuid(),$s->get($argv[1])["revision"],$n,$n+60000,"Your turn");echo $r["entryId"];' "$USER_ID")
 INB_READ_BODY=$(php -r 'echo json_encode(["userId"=>$argv[1],"entryId"=>$argv[2]]);' "$USER_ID" "$INB_MESSAGE")
 INB_READ=$(curl -s "$BASE_URL/inbox/read" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$INB_READ_BODY")
 assert_contains 'inbox read persists flag' '"read":true' "$INB_READ"
@@ -1093,6 +1093,7 @@ assert_status 'removed reward cannot regrant' 404 "$INB_AFTER_REMOVE"
 INB_ADMIN=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$TEST_PORT/api/v1/admin/inbox/broadcasts" -H "X-API-Key: $API_KEY")
 assert_status 'inbox operator routes are not public app administration' 404 "$INB_ADMIN"
 if php tests/inbox.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/inbox-compact.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 if php tests/inbox-migration.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
 # ---- Friends: real authenticated REST and independent SQL concurrency/rollback regressions ----

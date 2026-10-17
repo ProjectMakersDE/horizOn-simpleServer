@@ -1,6 +1,7 @@
 <?php
 
 declare(strict_types=1);
+require_once __DIR__.'/inbox-fixtures.php';
 require_once __DIR__ . '/../src/Core/Database.php';
 require_once __DIR__ . '/../src/Groups/GroupService.php';
 
@@ -125,7 +126,7 @@ try {
     $friends->change('block',$blockOfficer,$blockTarget,0); reject('GROUP_RELATION_BLOCKED',static function () use ($act,$blockTarget,$bid,$pendingId) { $act('accept-invite',$blockTarget,$bid,null,$pendingId); }); $act('decline-invite',$blockTarget,$bid,null,$pendingId);
     // Full recipient/confirmation Inboxes roll back every membership/player/pending write.
     $content = ['type' => 'fixture','textKey' => 'fixture','expiresAt' => InboxRules::instant($now + InboxRules::RETENTION)];
-    $fill = static function (string $user) use ($inbox,$content,$now): void { for ($i = count($inbox->get($user)['entries']);$i < 50;$i++) $inbox->deliver($user,$content,'groups-full:' . $user . ':' . $i,$now,'fixture'); };
+    $fill = static function(string $user)use($pdo,$now):void{fillInboxFixture($pdo,$user,$now);};
     $fill($full); $rollbackGroup = $newGroup($rollback); $gid = $rollbackGroup['id']; $before = $rev($rollback,$gid);
     reject('INBOX_FULL',static function () use ($act,$rollback,$gid,$full) { $act('invite',$rollback,$gid,$full); }); check($before,$rev($rollback,$gid),'Full Inbox preserves group revision'); check([],$service->get($full)['incomingInvites'],'Full Inbox preserves player pending');
     $acceptOwner = $createUser(); $acceptUser = $createUser(); $acceptGroup = $newGroup($acceptOwner,'request'); $aid = $acceptGroup['id']; $req = $act('request',$acceptUser,$aid)['groups']['outgoingRequests'][0]['requestId']; $fill($acceptUser);

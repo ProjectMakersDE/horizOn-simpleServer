@@ -21,17 +21,17 @@ class TrustedNoticeIntent
         if(!file_exists($this->path))return null;$raw=file_get_contents($this->path,false,null,0,32769);if($raw===false||strlen($raw)>32768)SharedObjectRules::fail('INTENT_STORAGE_ERROR');
         try{$value=SharedObjectRules::fields(SharedObjectRules::decode($raw),['status','intent','binding','attempts','result','lastError']);}catch(Throwable $e){SharedObjectRules::fail('INTENT_STORAGE_ERROR');}
         if(!in_array($value['status']??null,['pending','delivered','expired','unconfirmed'],true)||!isset($value['intent'],$value['binding'])||!is_int($value['attempts']??null)||$value['attempts']<0||!is_string($value['lastError']??null))SharedObjectRules::fail('INTENT_STORAGE_ERROR');
-        $value['intent']=SharedObjectRules::fields($value['intent'],['apiKeyId','userId','operationId','issuedAt','expiresAt','textKey','reference','parameters']);$value['binding']=SharedObjectRules::fields($value['binding'],['defenseObjectId','defenseRevision','runId']);
+        $value['intent']=SharedObjectRules::fields($value['intent'],['apiKeyId','userId','operationId','issuedAt','expiresAt','textKey','reference','parameters','freeText','expectedRevision']);$value['binding']=SharedObjectRules::fields($value['binding'],['defenseObjectId','defenseRevision','runId']);
         try{
-            $this->validate($value['intent'],$value['binding']);SharedObjectRules::integer($value['attempts']);
+            $this->validate($value['intent'],$value['binding'],true);SharedObjectRules::integer($value['attempts']);
             if(!array_key_exists('result',$value))SharedObjectRules::invalid();
             if($value['status']==='delivered'){$result=SharedObjectRules::fields($value['result'],['entryId','replayed']);if(count($result)!==2||$value['attempts']<1||!is_bool($result['replayed']??null)||strpos((string)($result['entryId']??''),'message:')!==0)SharedObjectRules::invalid();InboxRules::entry($result['entryId']);$value['result']=$result;}
             elseif($value['result']!==null)SharedObjectRules::invalid();
         }catch(Throwable $error){SharedObjectRules::fail('INTENT_STORAGE_ERROR');}return $value;
     }
-    private function validate(array $intent,array $binding): void
+    private function validate(array $intent,array $binding,bool $stored=false): void
     {
-        TrustedNoticeService::validateInput($intent);
+        if($stored)TrustedNoticeService::validateStoredInput($intent);else TrustedNoticeService::validateInput($intent);
         SharedObjectRules::uuid($binding['defenseObjectId']??null);SharedObjectRules::integer($binding['defenseRevision']??null);SharedObjectRules::uuid($binding['runId']??null);
     }
     private static function same($first,$second): bool
@@ -48,7 +48,7 @@ class TrustedNoticeIntent
     }
     public function stage($raw): array
     {
-        $input=SharedObjectRules::fields($raw,['intent','binding']);$intent=SharedObjectRules::fields($input['intent']??null,['apiKeyId','userId','operationId','issuedAt','expiresAt','textKey','reference','parameters']);$binding=SharedObjectRules::fields($input['binding']??null,['defenseObjectId','defenseRevision','runId']);$this->validate($intent,$binding);
+        $input=SharedObjectRules::fields($raw,['intent','binding']);$intent=SharedObjectRules::fields($input['intent']??null,['apiKeyId','userId','operationId','issuedAt','expiresAt','freeText','expectedRevision']);$binding=SharedObjectRules::fields($input['binding']??null,['defenseObjectId','defenseRevision','runId']);$this->validate($intent,$binding);
         return $this->locked(function()use($intent,$binding){$before=$this->read();if($before!==null){if(!self::same($before['intent'],$intent)||!self::same($before['binding'],$binding))SharedObjectRules::fail('INTENT_CONFLICT');return $before;}$state=['status'=>'pending','intent'=>$intent,'binding'=>$binding,'attempts'=>0,'result'=>null,'lastError'=>''];$this->write($state);return $state;});
     }
     public function deliver(): array

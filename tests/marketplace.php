@@ -1,6 +1,7 @@
 <?php
 
 declare(strict_types=1);
+require_once __DIR__.'/inbox-fixtures.php';
 require_once __DIR__.'/../src/Marketplace/MarketService.php';
 
 class MarketProbePDO extends PDO
@@ -93,7 +94,7 @@ try{
     reject('INVENTORY_FULL',static function()use($s,$fullBuyer,$fullOffer,$buy){$s->buy($fullBuyer,$fullOffer['id'],$buy($fullBuyer,$fullOffer));});check($fullBefore,$values->history($fullBuyer),'Full inventory undoes debit and PV receipt');
     // Full Inbox leaves the original source pending, then exactly one handoff after a slot is freed.
     $pendingOwner=$user();$pendingRef=$grant($pendingOwner)['items'][0];$pendingOffer=$s->create($pendingOwner,$make($pendingOwner,$pendingRef['instanceId']))['listing'];
-    $notice=['type'=>'notice','reference'=>'fixture','textKey'=>'test.notice','expiresAt'=>MarketRules::instant($now+100000),'attachment'=>null];for($i=0;$i<50;$i++)$inbox->deliver($pendingOwner,$notice,Database::uuid(),$now,'fill');
+    $notice=['type'=>'notice','reference'=>'fixture','textKey'=>'test.notice','expiresAt'=>MarketRules::instant($now+100000),'attachment'=>null];fillInboxFixture($pdo,$pendingOwner,$now);
     $pendingCancel=['userId'=>$pendingOwner,'operationId'=>Database::uuid(),'issuedAt'=>MarketRules::instant($now),'expectedListingRevision'=>1];$pending=$s->cancel($pendingOwner,$pendingOffer['id'],$pendingCancel)['listing'];check('return_pending',$pending['status'],'Cancel prepares escrow');check('pending',$s->retryReturn($pendingOwner,$pendingOffer['id'])['delivery'],'Full inbox does not erase escrow');check($pendingRef,$pending['itemReference'],'Original return reference retained');check([],$items->get($pendingOwner)['instances'],'Full inbox cannot directly grant');
     $inbox->remove($pendingOwner,$inbox->get($pendingOwner)['entries'][0]['id']);$handoff=$s->retryReturn($pendingOwner,$pendingOffer['id']);check('delivered',$handoff['delivery'],'Explicit pending handoff');check(50,count($inbox->get($pendingOwner)['entries']),'Exactly one return message');check('delivered',$s->retryReturn($pendingOwner,$pendingOffer['id'])['delivery'],'Delivered source prevents duplicates');check(50,count($inbox->get($pendingOwner)['entries']),'Handoff replay no duplicate');
     // A lost acknowledgement in the SECOND commit means the Inbox/source handoff already completed.
@@ -128,7 +129,7 @@ try{
     // Fair due cursors advance past full Inbox sources and keep all item escrows.
     $now+=60000;$maintenanceIds=[];
     for($ownerIndex=0;$ownerIndex<5;$ownerIndex++){
-        $owner=$user();$notice['expiresAt']=MarketRules::instant($now+MarketRules::RETENTION);for($i=0;$i<50;$i++)$inbox->deliver($owner,$notice,Database::uuid(),$now,'maintenance-fill');
+        $owner=$user();$notice['expiresAt']=MarketRules::instant($now+MarketRules::RETENTION);fillInboxFixture($pdo,$owner,$now);
         for($i=0;$i<9;$i++){$now+=1000;$ref=$grant($owner)['items'][0];$maintenanceIds[]=$s->create($owner,$make($owner,$ref['instanceId']))['listing']['id'];}
     }
     $now+=301000;

@@ -212,12 +212,13 @@ class GroupService implements GroupMembershipPolicy
     {
         if (!$command['dirty']) return $command['old'];
         foreach ($command['after'] as $user => $after) $this->store->savePlayer($user,$command['before'][$user],$after,in_array($user,$command['present'],true),isset($command['forced'][$user]));
+        if ($command['deleted']) { $this->store->deleteGroup($command['old']); return null; }
+        $saved=$this->store->saveGroup($command['old'],$command['next'],InboxRules::instant(($this->clock)()));
         foreach ($command['notices'] as [$recipient,$action,$request]) {
             $now = ($this->clock)(); $source = 'groups:' . $action . ':' . $request;
             $this->inbox->deliver($recipient,['type' => 'group_' . $action,'reference' => $request,'textKey' => 'horizon.groups.' . $action,'parameters' => ['groupId' => $command['old']['id']],'expiresAt' => InboxRules::instant($now + InboxRules::RETENTION)],$source,$now,$source);
         }
-        if ($command['deleted']) { $this->store->deleteGroup($command['old']); return null; }
-        return $this->store->saveGroup($command['old'],$command['next'],InboxRules::instant(($this->clock)()));
+        return $saved;
     }
     /** At most ten indexed group references per invocation; keep the nullable FK retry anchor. */
     public function cleanupDeletedPlayer(string $user): array

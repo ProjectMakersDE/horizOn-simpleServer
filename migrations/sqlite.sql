@@ -248,7 +248,7 @@ CREATE TABLE IF NOT EXISTS player_values (
 
 -- Bounded inbox state; no broadcast fanout.
 CREATE TABLE IF NOT EXISTS inbox_catalog (id INTEGER PRIMARY KEY, data TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS inbox_state (user_id TEXT PRIMARY KEY, data TEXT NOT NULL,
+CREATE TABLE IF NOT EXISTS inbox_state (user_id TEXT PRIMARY KEY, data TEXT NOT NULL,next_expiry INTEGER,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE);
 
 -- Friends: nullable active pointer retains an indexed deletion anchor, including block-only targets.
@@ -360,7 +360,7 @@ CREATE INDEX IF NOT EXISTS idx_market_deleted ON player_market(active_user_id,us
 CREATE TABLE IF NOT EXISTS market_listings(id TEXT PRIMARY KEY COLLATE BINARY,revision INTEGER NOT NULL,status TEXT NOT NULL COLLATE BINARY,
  item_key TEXT NOT NULL COLLATE BINARY,price INTEGER NOT NULL,created_millis INTEGER NOT NULL,due_kind INTEGER NOT NULL,due_millis INTEGER NOT NULL,
  return_owner TEXT NOT NULL,create_actor TEXT COLLATE BINARY,create_operation TEXT COLLATE BINARY,
- close_actor TEXT COLLATE BINARY,close_operation TEXT COLLATE BINARY,data TEXT NOT NULL);
+ close_actor TEXT COLLATE BINARY,close_operation TEXT COLLATE BINARY,return_entry TEXT COLLATE BINARY,data TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_market_price ON market_listings(status,price,id);
 CREATE INDEX IF NOT EXISTS idx_market_item_price ON market_listings(status,item_key,price,id);
 CREATE INDEX IF NOT EXISTS idx_market_admin ON market_listings(created_millis,id);
@@ -368,3 +368,7 @@ CREATE INDEX IF NOT EXISTS idx_market_admin_status ON market_listings(status,cre
 CREATE INDEX IF NOT EXISTS idx_market_due ON market_listings(due_kind,due_millis,id);
 CREATE INDEX IF NOT EXISTS idx_market_owner ON market_listings(return_owner,id);
 CREATE TABLE IF NOT EXISTS market_maintenance(kind TEXT PRIMARY KEY,revision INTEGER NOT NULL,data TEXT NOT NULL);
+
+-- Request identity index only, no duplicated pending payload or player list.
+CREATE TABLE IF NOT EXISTS group_inbox_sources(request_id TEXT PRIMARY KEY COLLATE BINARY,group_id TEXT NOT NULL,FOREIGN KEY(group_id) REFERENCES groups_state(id) ON DELETE CASCADE);
+CREATE INDEX IF NOT EXISTS idx_group_inbox_group ON group_inbox_sources(group_id,request_id);
