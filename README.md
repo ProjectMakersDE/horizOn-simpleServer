@@ -1398,30 +1398,95 @@ reviewed usage revision. A world view queries a bounded rectangle and explicitly
 follows its cursor. Friends/private maps use the matching collection policy and
 one explicit partition. Rendering and decoding the bytes belongs to the game.
 
-One installation is one project: fixed self-hosted caps are100 lifetime collection
-keys,2GiB charged storage and64KiB decoded data per object. A definition permits
-1..100 objects per owner, at most3 typed search fields (`integer` or UTF-8 string
-at most96bytes), optional integer position and null or60..2592000-second TTL.
+One installation is one project. Operator environment settings
+`SHARED_OBJECTS_COLLECTIONS=100`, `SHARED_OBJECTS_STORAGE_MIB=2048` and
+`SHARED_OBJECTS_OBJECT_KIB=64` are editable defaults, not additional maximums.
+Collection/storage settings accept positive signed32-bit integers; decoded objects
+accept1..1024KiB because the existing decoded query page remains1MiB. Invalid
+settings are rejected instead of silently clamped. A definition permits
+1..2147483647 objects per owner (the public signed32-bit field), at most3 typed
+search fields (`integer` or UTF-8 string at most96bytes), optional integer position
+and null or60..2592000-second TTL. Names remain120UTF-8 bytes, keys64ASCII bytes.
+These format/wire bounds are separate from operator quotas. The strict JSON/CLI
+request envelope is1500000bytes, enough for the canonical1MiB Base64 payload and
+all legal metadata. Query pages still contain at most50objects/1MiB decoded bytes.
 Read/write policy, search schema, position and TTL become permanently immutable
 after the first object, even after emptying the collection. Archive/name/size/count
 changes remain available; no hard-delete/reuse of collection keys. Retained
-objects and owner revisions survive lower limits. Charge is decoded bytes plus
-8192bytes per object and512bytes per owner/collection ledger; this conservative
-accounting includes metadata/index reserve, not a measured hosted capacity claim.
+objects and owner revisions survive lower limits; reads and exact deletion remain
+available. Charge is decoded bytes plus8192bytes per object and512bytes per
+owner/collection ledger. These are billing reserves, not actual SQL record sizes.
+Sparse historical charges are preserved exactly by conversion and cleanup.
 
-The additive migration creates six tables: catalog, definitions, account quota,
-owner usage, object metadata and separate BLOB payloads. Quota, usage, permission
-fences and both halves of each object commit on the same PDO and explicit
-`SqlTransaction`. Failed joins to an external native transaction use a savepoint,
-so catching a refusal cannot publish partial quota or bytes. Public MySQL reads
-require their own repeatable-read snapshot and refuse opaque external transactions:
-a session default cannot prove an individual transaction's isolation override.
-SQLite reads use a consistent deferred snapshot. Physical user deletion retains
-an indexed nullable-FK usage anchor and keeps bytes charged until cleanup refunds
-them. Schedule operator cleanup: expiry removes at most20 objects per call;
-deleted-user cleanup handles at most10 owner anchors, each bounded to20 objects
-and20 empty usage ledgers. Follow `nextAfterUserId`, then repeat remaining work.
-Never disable foreign keys or manually erase usage/quota anchors.
+The six compact tables store collection identity once as a permanent positive
+numeric slot. Definitions retain their key/name/schema once, with numeric policy
+flags and compact JSON. Metadata stores UUIDs as16bytes; its partition is an empty
+all discriminator, the existing owner UUID, or the existing group UUID. An owner
+is omitted when already represented by the partition; group is omitted when
+already represented there. Integer search keys use8ordered bytes, strings their
+original UTF-8 bytes, and position two native integers. There is no second search
+map, HEX string, position JSON, collection-key copy or textual partition. The
+original public cursor keeps its canonical sort text; SQL converts only the bound
+key. Payloads contain only UUID/revision/opaque bytes. Owner ledgers retain a
+16byte user identity plus the existing nullable36byte users-FK pointer: this
+SQL-specific deletion anchor is intentional and included in measurements, not
+hidden as free storage. Normal512byte ledger charge is implicit; historical
+charges occupy an optional numeric column. Retained count0 anchors prevent ABA.
+Quota, usage, permission fences and both halves of each object commit on the same
+PDO and explicit `SqlTransaction`. Update/delete conditionally check the paired
+revision and byte length without reading the old blob. A failed pair CAS cannot
+refund quota or advance the owner revision. Failed joins to an external native
+transaction use a savepoint. Public MySQL reads require their own repeatable-read
+snapshot and refuse opaque external transactions; SQLite uses a deferred snapshot.
+
+Fresh bootstrap creates this schema. An existing legacy schema is detected and
+left untouched; Shared routes refuse `MIGRATION_REQUIRED` until an explicit cold
+cutover. Bootstrap, authentication, reads and schedulers do not migrate data or
+replace old indexes. Before converting, stop **all** application/operator writers
+(including user deletion), install the new code for all readers/writers, and obtain
+an approved complete backup with a successful restore rehearsal. This CLI does
+not prove that external operational evidence; its flags attest that it exists.
+Do not run it on an installation without that separate approval.
+
+```bash
+php bin/shared-objects-migrate.php plan
+php bin/shared-objects-migrate.php apply PLAN_SHA256 --writers-stopped --backup-restore-verified --all-readers-writers-upgraded
+# Verify the original objects, revisions, byte lengths and quota, while still stopped.
+php bin/shared-objects-migrate.php retire PLAN_SHA256 --writers-stopped --backup-restore-verified
+```
+
+The plan binds the exact database and every original row. Unknown columns,
+indexes, triggers, constraints or JSON fields, mismatched sort copies, absent
+payloads, count/charge discrepancies and changed originals fail closed. Copying
+uses20row keyset pages, with no complete object/owner catalogue in memory.
+SQLite copies and switches all six tables in one `BEGIN IMMEDIATE` transaction;
+a crash before commit rolls everything back. The MySQL converter alone requires
+MySQL8.0.13+ with six InnoDB tables and refuses MariaDB/older/unproven variants
+**before DDL**. Fresh runtime SQL retains its existing compatibility. This is based
+on [MySQL's WRITE-lock RENAME contract](https://dev.mysql.com/doc/refman/8.0/en/rename-table.html)
+and [atomic InnoDB DDL](https://dev.mysql.com/doc/refman/8.0/en/atomic-ddl.html).
+MySQL locks originals, staging tables and users against concurrent writes, verifies
+the sealed plan, copies into `_next1012`, then atomically renames all six table
+pairs. Before switch, originals are authoritative. Interrupted derived staging
+requires explicit `discard-staging PLAN_SHA256 --writers-stopped
+--backup-restore-verified`; it is never silently deleted or resumed. After switch,
+the compact tables are authoritative and `_legacy1012` is only the original
+backup. A lost switch acknowledgement is reconciled by inspecting the actual
+schema and originals; do not rerun apply or reverse newer writes. `retire` checks
+the exact original digest before dropping only those six backup tables. The new
+column dialect fences every old configuration/create/update/delete/cleanup SQL
+path; an old `CREATE TABLE IF NOT EXISTS` cannot recreate missing old columns.
+Migration temporarily duplicates records/indexes, which must be budgeted separately;
+after verified retirement there is only one partition. No payload or charge is
+inferred from current defaults. Keep maintenance active until verification/retire.
+
+Physical user deletion retains the indexed nullable-FK usage anchor and keeps
+bytes charged until cleanup refunds them. Schedule operator cleanup: expiry
+removes at most20objects per call. Deleted-user cleanup removes at most20objects
+from two bounded index paths (up to40metadata candidates) and then20empty ledgers.
+Collection definitions needed for cold cleanup are resolved in bounded batches.
+The outer deleted-owner page handles at most10anchors; follow `nextAfterUserId`,
+then repeat remaining work. Never disable FKs or manually erase usage/quota anchors.
 
 ### Trusted asynchronous PvP notice recipe
 

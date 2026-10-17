@@ -1116,6 +1116,7 @@ if php tests/shared-objects-http.php "$BASE_URL" "$API_KEY" "$USER_ID" "$SESSION
 if php tests/shared-objects.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 if php tests/shared-objects-notice.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 if php tests/shared-objects-migration.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/shared-objects-compact.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 if python3 tests/shared-objects-seek.py; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 if php tests/chat-http.php "$BASE_URL" "$API_KEY" "$USER_ID" "$SESSION_TOKEN"; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); fi
 if php tests/matches-http.php "$BASE_URL" "$API_KEY"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
@@ -1193,6 +1194,9 @@ CHAT_CLI_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TES
 assert_status 'Chat unsupported CLI rejects direct HTTP before bootstrap' 403 "$CHAT_CLI_STATUS"
 CHAT_CLI_BODY=$(curl -s "http://localhost:${TEST_PORT}/bin/chat.php")
 if [ -z "$CHAT_CLI_BODY" ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); echo 'FAIL: Chat operator exposed response data'; fi
+
+SO_MIGRATION_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TEST_PORT}/bin/shared-objects-migrate.php")
+assert_status 'Shared Objects cold migration CLI rejects HTTP before configuration' 403 "$SO_MIGRATION_STATUS"
 
 # ---- Summary ----
 echo ""

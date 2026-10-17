@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 require_once __DIR__.'/SharedObjectStore.php';
+require_once __DIR__.'/../Core/Config.php';
 require_once __DIR__.'/SharedObjectQuery.php';
 require_once __DIR__.'/../Core/SqlTransaction.php';
 require_once __DIR__.'/../Groups/GroupStore.php';
@@ -12,7 +13,10 @@ class SharedObjectService
     {
         $this->pdo=$pdo;$this->mysql=$pdo->getAttribute(PDO::ATTR_DRIVER_NAME)==='mysql';$this->transactions=$transactions??new SqlTransaction($pdo);if(!$this->transactions->owns($pdo))throw new InvalidArgumentException('Foreign transaction connection');
         $this->clock=$clock??static function(){return Database::nowMillis();};$this->store=new SharedObjectStore($pdo);$this->groups=new GroupStore($pdo);$this->planner=$planner??new SharedObjectQuery();
-        $this->cap=$limits??['collections'=>100,'storageBytes'=>2147483648,'objectBytes'=>65536];SharedObjectRules::integer($this->cap['collections'],1,100);SharedObjectRules::integer($this->cap['storageBytes'],1,2147483648);SharedObjectRules::integer($this->cap['objectBytes'],1,65536);
+        $this->cap=$limits??['collections'=>Config::operatorLimit('SHARED_OBJECTS_COLLECTIONS',100),
+            'storageBytes'=>Config::operatorLimit('SHARED_OBJECTS_STORAGE_MIB',2048)*1048576,
+            'objectBytes'=>Config::operatorLimit('SHARED_OBJECTS_OBJECT_KIB',64,1024)*1024];
+        SharedObjectRules::integer($this->cap['collections'],1,SharedObjectStorage::INT_MAX);SharedObjectRules::integer($this->cap['storageBytes'],1);SharedObjectRules::integer($this->cap['objectBytes'],1,SharedObjectRules::PAGE_BYTES);
         if(!$this->mysql)$pdo->exec('PRAGMA busy_timeout=5000');
     }
     private function translate(callable $work)
@@ -53,7 +57,7 @@ class SharedObjectService
     public function collections(?string $user,?string $after=null,int $limit=50,?int $expected=null): array
     {
         if($user!==null)$user=SharedObjectRules::uuid($user);if($after!==null)SharedObjectRules::key($after);SharedObjectRules::integer($limit,1,50);if($expected!==null)SharedObjectRules::integer($expected);
-        return $this->snapshot(function()use($user,$after,$limit,$expected){$this->actor($user);$header=$this->store->catalog();if($expected!==null&&$expected!==$header['revision'])SharedObjectRules::fail('COLLECTION_REVISION_CONFLICT');$rows=$this->store->collections($after,$limit);$page=array_slice($rows,0,$limit);return ['revision'=>$header['revision'],'definitions'=>$page,'nextAfterKey'=>count($rows)>$limit?$page[count($page)-1]['key']:null,'limits'=>$this->cap,'serverTime'=>SharedObjectRules::instant($this->now())];});
+        return $this->snapshot(function()use($user,$after,$limit,$expected){$this->actor($user);$header=$this->store->catalog();if($expected!==null&&$expected!==$header['revision'])SharedObjectRules::fail('COLLECTION_REVISION_CONFLICT');$rows=$this->store->collections($after,$limit);$page=array_map([SharedObjectStorage::class,'wire'],array_slice($rows,0,$limit));return ['revision'=>$header['revision'],'definitions'=>$page,'nextAfterKey'=>count($rows)>$limit?$page[count($page)-1]['key']:null,'limits'=>$this->cap,'serverTime'=>SharedObjectRules::instant($this->now())];});
     }
     public function put(string $key,$expected,$raw): array
     {
@@ -62,7 +66,8 @@ class SharedObjectService
             if($input['maxObjectBytes']>$this->cap['objectBytes']&&$input['maxObjectBytes']!==($before['maxObjectBytes']??null))SharedObjectRules::invalid();
             if($before===null&&$header['total']>=$this->cap['collections'])SharedObjectRules::fail('COLLECTION_LIMIT_REACHED',422);
             if($before!==null&&$before['used']&&SharedObjectRules::schema($input)!==SharedObjectRules::schema($before))SharedObjectRules::fail('COLLECTION_SCHEMA_LOCKED',422);
-            $next=['key'=>$key]+$input+['used'=>$before['used']??false,'revision'=>SharedObjectRules::next($before['revision']??0)];$changed=$header;$changed['revision']=SharedObjectRules::next($header['revision']);$changed['total']+=($before===null?1:0);$this->store->saveCatalog($header,$changed);$this->store->saveCollection($before,$next);return ['revision'=>$changed['revision'],'definition'=>$next,'limits'=>$this->cap,'serverTime'=>SharedObjectRules::instant($this->now())];});
+            if($before===null&&$header['nextSlot']>=SharedObjectStorage::INT_MAX)SharedObjectRules::fail('STORAGE_IDENTITY_EXHAUSTED');
+            $next=['key'=>$key]+$input+['used'=>$before['used']??false,'revision'=>SharedObjectRules::next($before['revision']??0),'_slot'=>$before['_slot']??$header['nextSlot']];$changed=$header;$changed['revision']=SharedObjectRules::next($header['revision']);$changed['total']+=($before===null?1:0);$changed['nextSlot']+=($before===null?1:0);$this->store->saveCatalog($header,$changed);$this->store->saveCollection($before,$next);return ['revision'=>$changed['revision'],'definition'=>SharedObjectStorage::wire($next),'limits'=>$this->cap,'serverTime'=>SharedObjectRules::instant($this->now())];});
     }
     public function limits(): array{return $this->snapshot(function(){$q=$this->store->quota();return ['limits'=>$this->cap,'chargedBytes'=>$q['chargedBytes'],'revision'=>$q['revision']];});}
     public function usage(?string $actor,string $collection,string $owner): array
