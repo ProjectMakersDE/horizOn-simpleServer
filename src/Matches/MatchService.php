@@ -53,7 +53,7 @@ class MatchService
             if(in_array($user,$new['closedIds'],true))$next['closedAt'][$v['id']]=$v['finishedAt'];else unset($next['closedAt'][$v['id']]);
             if($next===$current)continue;
             foreach(['activeIds'=>['activeMatches','ACTIVE_MATCH_LIMIT_REACHED'],'settlementIds'=>['settlementMatches','SETTLEMENT_LIMIT_REACHED'],'invitedIds'=>['pendingInvites','INVITE_LIMIT_REACHED']] as $key=>[$limit,$code])if(in_array($user,array_diff($new[$key],$old[$key]),true)&&count($next[$key])>$this->cap[$limit])MatchRules::fail($code,422);
-            $changes[]=[$user,$current,$next,in_array($user,array_diff($new['settlementIds'],$old['settlementIds']),true)];
+            $changes[]=[$user,$current,$next,in_array($user,array_diff($new['settlementIds'],$old['settlementIds']),true)||in_array($user,array_diff($new['invitedIds'],$old['invitedIds']),true)];
         }$this->store->savePlayers($changes);
     }
     private function activeIds(?array $v): array{return$v!==null&&in_array($v['status'],['lobby','active'],true)?array_values(array_diff($v['participantIds'],$v['forfeitedIds'])):[];}

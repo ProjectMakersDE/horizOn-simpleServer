@@ -1666,8 +1666,9 @@ serialized frame; an admission that would grow beyond it fails before DML. No fi
 count substitutes for that measured byte bound. New participation also checks the exact encoded
 form after all open settlements complete, including their8-byte finish times, Base64 padding and
 JSON overhead. Those already admitted matches can therefore finish within the same frame.
-Pre-existing larger SQLite player records
-remain readable and can shrink. See the [MySQL BLOB/TEXT reference](https://dev.mysql.com/doc/refman/8.4/en/blob.html).
+Pre-existing larger SQLite player records remain readable and can shrink or finish their original
+participations within that same deterministically encoded completion form. A new invitation or
+participation must fit the portable frame. See the [MySQL BLOB/TEXT reference](https://dev.mysql.com/doc/refman/8.4/en/blob.html).
 
 Invitations reserve only invitation capacity. Create/join atomically reserve active and
 settlement slots. Reporting releases the active slot and keeps its settlement reservation;
