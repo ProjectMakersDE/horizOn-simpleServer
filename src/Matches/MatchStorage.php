@@ -86,6 +86,10 @@ class MatchStorage
     public static function playerWrite(array $v):string{
         $edges=[];foreach(['activeIds'=>self::ACTIVE,'historyIds'=>self::DETAIL,'invitedIds'=>self::INVITED,'settlementIds'=>self::SETTLEMENT,'closedIds'=>self::CLOSED] as $name=>$flag)foreach($v[$name] as $id)$edges[self::uuid($id)]=($edges[$id]??0)|$flag;ksort($edges,SORT_STRING);$b='';foreach($edges as $id=>$flag){self::valid(in_array($flag,[4,10,11,34],true));$b.=self::uuidBytes($id).chr($flag);if($flag&self::CLOSED)$b.=pack('P',self::number($v['closedAt'][$id]??null));}return MatchRules::json($b===''?['v'=>1]:['v'=>1,'b'=>base64_encode($b)]);
     }
+    /** Exact eventual JSON size, including Base64 padding; times always occupy eight binary bytes. */
+    public static function completionBytes(array $v):int{
+        foreach($v['settlementIds'] as $id){$v['closedIds'][]=$id;$v['closedAt'][$id]=0;}$v['closedIds']=array_values(array_unique($v['closedIds']));$v['activeIds']=[];$v['settlementIds']=[];return strlen(self::playerWrite($v));
+    }
     public static function playerRead(array $v):array{
         self::fields($v,['v','b'],['v']);self::valid($v['v']===1&&!in_array(null,$v,true));$out=MatchRules::emptyPlayer();$b=isset($v['b'])?self::binary($v['b']):'';$p=0;$seen=[];while($p<strlen($b)){self::valid(strlen($b)-$p>=17);$id=self::uuidRead(substr($b,$p,16));$p+=16;$f=ord($b[$p++]);self::valid(!isset($seen[$id])&&in_array($f,[4,10,11,34],true));$seen[$id]=true;foreach(['activeIds'=>self::ACTIVE,'historyIds'=>self::DETAIL,'invitedIds'=>self::INVITED,'settlementIds'=>self::SETTLEMENT,'closedIds'=>self::CLOSED] as $name=>$flag)if($f&$flag)$out[$name][]=$id;if($f&self::CLOSED)$out['closedAt'][$id]=self::longRead($b,$p);}return $out;
     }

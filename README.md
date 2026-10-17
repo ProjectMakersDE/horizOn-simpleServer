@@ -1663,7 +1663,10 @@ is rejected clearly; it is never silently capped. The Base64/JSON parser accepts
 frame also covers fully JSON-escaped Base64). Existing larger SQLite payloads remain readable and cancellable after a
 lower configured limit. The existing MySQL player `TEXT` record likewise has a65535-byte
 serialized frame; an admission that would grow beyond it fails before DML. No fixed reference
-count substitutes for that measured byte bound. Pre-existing larger SQLite player records
+count substitutes for that measured byte bound. New participation also checks the exact encoded
+form after all open settlements complete, including their8-byte finish times, Base64 padding and
+JSON overhead. Those already admitted matches can therefore finish within the same frame.
+Pre-existing larger SQLite player records
 remain readable and can shrink. See the [MySQL BLOB/TEXT reference](https://dev.mysql.com/doc/refman/8.4/en/blob.html).
 
 Invitations reserve only invitation capacity. Create/join atomically reserve active and
@@ -1673,7 +1676,9 @@ Reducing policy keeps existing reads and safe leave/cancel operations. Terminal 
 age policy is applied only by explicit bounded cleanup, apart from the new terminal row's
 stored expiry. A zero policy makes its detail immediately unavailable: its successful terminal
 response still contains the committed result; later point GET or identical result replay may
-return `MATCH_NOT_FOUND`. This never authorizes a new match, operation or reward. Player
+return `MATCH_NOT_FOUND`. This never authorizes a new match, operation or reward.
+Free0 completion removes the participation edge immediately, retaining no transient closed-history
+edge while its unavailable source awaits bounded cleanup. Minimal player
 revision anchors survive ordinary leave/cancel and empty histories, preventing create ABA.
 Lobbies expire after24 hours, started matches after30 days and open reports after24 hours.
 Reads never advance transitions or run cleanup.
