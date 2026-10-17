@@ -6,16 +6,28 @@ if (PHP_SAPI !== 'cli') { http_response_code(403); exit; }
 require_once __DIR__ . '/../src/Core/Config.php';
 require_once __DIR__ . '/../src/Core/Database.php';
 require_once __DIR__ . '/../src/PlayerValues/PlayerValuesService.php';
+require_once __DIR__ . '/../src/PlayerValues/PlayerValuesMigration.php';
 require_once __DIR__ . '/../src/Items/ItemJson.php';
 
 try {
     $command = $argv[1] ?? '';
-    if (!in_array($command, ['config', 'configure', 'player', 'correct'], true)) {
+    if (!in_array($command, ['config', 'configure', 'player', 'correct', 'compact-inspect', 'compact-apply'], true)) {
         fwrite(STDERR, "Usage:\n  php bin/player-values.php config\n  php bin/player-values.php configure EXPECTED_REVISION < config.json\n  php bin/player-values.php player USER_UUID\n  php bin/player-values.php correct USER_UUID < correction.json\n");
+        fwrite(STDERR, "  php bin/player-values.php compact-inspect AFTER_UUID_OR_DASH PAGE_SIZE\n  php bin/player-values.php compact-apply AFTER_UUID_OR_DASH PAGE_SIZE --writes-stopped --backup-verified\n");
         exit(2);
     }
     chdir(dirname(__DIR__));
     Config::load('.env'); Database::migrate();
+    if ($command === 'compact-inspect' || $command === 'compact-apply') {
+        $size = $argv[3] ?? '100';
+        if (!preg_match('/^[1-9][0-9]{0,2}$/D', $size)) throw new InvalidArgumentException('Expected page size');
+        if ($command === 'compact-apply' && (($argv[4] ?? '') !== '--writes-stopped' || ($argv[5] ?? '') !== '--backup-verified')) {
+            throw new InvalidArgumentException('Stop all writers and verify a restorable backup before applying');
+        }
+        $after = ($argv[2] ?? '-') === '-' ? '' : $argv[2];
+        echo json_encode((new PlayerValuesMigration(Database::connect()))->page($after, (int)$size, $command === 'compact-apply'), JSON_THROW_ON_ERROR) . "\n";
+        exit(0);
+    }
     $service = new PlayerValuesService(Database::connect());
     $input = null;
     if (in_array($command, ['configure', 'correct'], true)) {

@@ -70,7 +70,7 @@ $equip=['userId'=>$user,'instanceId'=>$id,'expectedRevision'=>2,'equipped'=>true
 [, $equipped]=api('POST','/items/equip',$equip,$session);check(true,$equipped['instances'][0]['equipped'],'Equipment explicit intent');check(3,$equipped['revision'],'Equipment revision');
 [, $discarded]=api('POST','/items/discard',['userId'=>$user,'instanceId'=>$id,'expectedRevision'=>3],$session);check([],$discarded['instances'],'Explicit discard');
 $values->configure(['definitions'=>$config['definitions'],'offers'=>[]],$values->config(false)['revision']);
-[, $replayed]=api('POST','/player-values/purchase',$buy,$session);check(true,$replayed['operation']['replayed'],'Removed offer replay');check($purchase['operation']['items'],$replayed['operation']['items'],'Original purchase item references');
+[, $replayed]=api('POST','/player-values/purchase',$buy,$session);check(true,$replayed['operation']['replayed'],'Removed offer replay');check([],$replayed['operation']['items'],'Replay carries no historical item references');
 [, $current]=api('GET','/items?userId='.$user,null,$session);check([],$current['instances'],'Replay cannot recreate discarded item');check(4,$current['revision'],'Replay cannot mutate inventory');
 check(4,operator(['player',$user])['inventory']['revision'],'Operator bounded inspection');
 foreach(['/items/grant','/admin/items/catalog']as$path){[$status]=api('POST',$path,['userId'=>$user],$session);check(404,$status,'No public grant/admin API');}

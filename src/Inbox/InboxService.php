@@ -162,7 +162,7 @@ class InboxService
                 try { $references=(new MarketService($this->pdo,$this->clock,$this->transactions))->claimReturn($user,$entry,$itemReturn); }
                 catch (MarketFailure $failure) { InboxRules::fail($failure->errorCode,$failure->getMessage(),$failure->status); }
                 $values=$this->values->get($user);
-            } else $values = $this->values->grant($user, $found['attachment']['values'], 'inbox:' . $entry, $now, 'inbox:' . $entry);
+            } else $values = $this->values->grantFromSource($user, $found['attachment']['values'], 'inbox:' . $entry, $now, 'inbox:' . $entry);
             return ['entryId' => $entry, 'replayed' => false, 'inbox' => $this->view($player, $next, $catalog, $now), 'playerValues' => $values,'items'=>$references];
         });
     }

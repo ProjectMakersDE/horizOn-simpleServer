@@ -2,7 +2,9 @@
 
 declare(strict_types=1);
 require_once __DIR__ . '/PlayerValuesLedger.php';
+require_once __DIR__ . '/PlayerValuesStorage.php';
 require_once __DIR__ . '/../Core/SqlTransaction.php';
+require_once __DIR__ . '/../Core/Config.php';
 require_once __DIR__ . '/../Items/ItemService.php';
 
 /**
@@ -16,10 +18,19 @@ class PlayerValuesService
     private bool $mysql;
     private $clock;
     private SqlTransaction $transactions;
+    private array $storageKeys = [];
+    private array $limits;
 
-    public function __construct(PDO $pdo, ?callable $clock = null, ?SqlTransaction $transactions = null)
+    public function __construct(PDO $pdo, ?callable $clock = null, ?SqlTransaction $transactions = null, array $limits = [])
     {
         $this->pdo = $pdo;
+        $this->limits = array_replace([
+            'definitions'=>Config::operatorLimit('PLAYER_VALUES_DEFINITIONS', 64, 256),
+            'offers'=>Config::operatorLimit('PLAYER_VALUES_OFFERS', 1000),
+            'receipts'=>Config::operatorLimit('PLAYER_VALUES_RECEIPTS', 50),
+        ], $limits);
+        foreach ($this->limits as $name=>$limit) if (!in_array($name,['definitions','offers','receipts'],true) || !is_int($limit) || $limit<1 || $limit>2147483647) throw new InvalidArgumentException('Invalid operator limit');
+        if ($this->limits['definitions']>256) throw new InvalidArgumentException('The stable value-slot format supports 256 lifetime keys');
         $this->transactions = $transactions ?? new SqlTransaction($pdo);
         if (!$this->transactions->owns($pdo)) throw new InvalidArgumentException("Transaction scope belongs to another connection");
         $this->mysql = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql';
@@ -52,10 +63,11 @@ class PlayerValuesService
         if ($row === false) throw new RuntimeException('Player-values schema is not initialized');
         $config = ['revision' => (int)$row['revision'], 'definitions' => json_decode($row['definitions'], true, 512, JSON_THROW_ON_ERROR),
             'knownKeys' => json_decode($row['known_keys'], true, 512, JSON_THROW_ON_ERROR)];
+        $this->storageKeys = $config['knownKeys'];
         if ($offers) {
-            $config['offers'] = array_map(static function ($row) { $offer = json_decode($row['data'], true, 512, JSON_THROW_ON_ERROR); $offer['itemRewards'] = $offer['itemRewards'] ?? []; return $offer; },
+            $config['offers'] = array_map(static function ($row) { $offer = json_decode($row['data'], true, 512, JSON_THROW_ON_ERROR); $offer['itemRewards'] = $offer['itemRewards'] ?? []; $offer['purchasesPerDay'] = null; return $offer; },
                 $this->pdo->query('SELECT data FROM player_value_offers ORDER BY offer_key')->fetchAll());
-            $config['limits'] = ['definitions' => 64, 'offers' => 1000, 'receipts' => PlayerValuesLedger::RECEIPTS];
+            $config['limits'] = $this->limits;
         }
         return $config;
     }
@@ -77,17 +89,14 @@ class PlayerValuesService
         if ($net>0) [$credit,$ignored]=PlayerValuesLedger::grant($credit,$definitions,[['key'=>$key,'amount'=>$net]]);
         foreach ([[$buyer,$debit,-$price],[$seller,$credit,$net]] as [$user,$state,$amount]) {
             if ($amount===0) continue;
-            $receipt=['operationId'=>'marketplace:'.$listing,'payloadHash'=>PlayerValuesLedger::hash('marketplace',$listing,$user,$key,(string)$amount),
-                'source'=>'marketplace:'.$listing,'issuedAtMillis'=>$issued,'recordedAtMillis'=>$now,
-                'issuedAt'=>PlayerValuesLedger::instant($issued),'recordedAt'=>PlayerValuesLedger::instant($now),'applied'=>[['key'=>$key,'amount'=>$amount]],'note'=>null,'items'=>[]];
-            $this->save($user,PlayerValuesLedger::record($state,$receipt,$now));
+            $this->save($user,PlayerValuesLedger::advance($state));
         }
     }
 
     /** Local operator only. Expected revision is mandatory, including initial revision zero. */
     public function configure(array $request, int $expectedRevision): array
     {
-        $next = PlayerValuesLedger::config($request);
+        $next = PlayerValuesLedger::config($request, $this->limits['definitions'], $this->limits['offers']);
         return $this->transaction(function () use ($next, $expectedRevision) {
             $current = $this->config(false, true);
             if ($current['revision'] !== $expectedRevision) PlayerValuesLedger::fail('REVISION_CONFLICT', 'Configuration changed; reload it', 409);
@@ -112,7 +121,7 @@ class PlayerValuesService
             ($this->mysql && $this->pdo->inTransaction() ? ' FOR UPDATE' : ''));
         $query->execute([$userId]);
         $row = $query->fetch();
-        return $row === false ? PlayerValuesLedger::emptyState() : json_decode($row['data'], true, 512, JSON_THROW_ON_ERROR);
+        return $row === false ? PlayerValuesLedger::emptyState() : PlayerValuesStorage::decode($row['data'], $this->storageKeys);
     }
 
     private function save(string $userId, array $state): void
@@ -120,7 +129,7 @@ class PlayerValuesService
         $sql = $this->mysql
             ? 'INSERT INTO player_values(user_id, data) VALUES (?, ?) ON DUPLICATE KEY UPDATE data = VALUES(data)'
             : 'INSERT INTO player_values(user_id, data) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET data = excluded.data';
-        $this->pdo->prepare($sql)->execute([$userId, json_encode($state, JSON_THROW_ON_ERROR)]);
+        $this->pdo->prepare($sql)->execute([$userId, PlayerValuesStorage::encode($state, $this->storageKeys)]);
     }
 
     public function get(string $userId): array
@@ -184,8 +193,9 @@ class PlayerValuesService
     }
 
     /** Server-only grant. The caller persists issuedAt with its source and owns any outer transaction. */
-    public function grant(string $userId, array $values, string $operationId, int $issuedAt, string $source): array
+    public function grant(string $userId, array $values, string $operationId, int $issuedAt, string $source, bool $sourceOwned = false): array
     {
+        if ($sourceOwned && !$this->transactions->isRunning()) throw new LogicException('Source-owned credit requires the existing SQL transaction');
         PlayerValuesLedger::text($operationId, 128, 'operationId'); PlayerValuesLedger::text($source, 200, 'source');
         $values = PlayerValuesLedger::list($values, 64);
         // Validate before sorting/hashing, keeping malformed server input from coercing JSON numbers.
@@ -196,9 +206,13 @@ class PlayerValuesService
         usort($values, static function ($a, $b) { return strcmp($a['key'], $b['key']); });
         $parts = ['grant', $source, (string)$issuedAt];
         foreach ($values as $value) { $parts[] = $value['key']; $parts[] = (string)$value['amount']; }
-        return $this->mutate($userId, $operationId, $issuedAt, PlayerValuesLedger::hash(...$parts), $source, null,
-            static function ($state, $definitions) use ($values) { return PlayerValuesLedger::grant($state, $definitions, $values); });
+        return $this->mutate($userId, $operationId, $issuedAt, $sourceOwned ? '' : PlayerValuesLedger::hash(...$parts), $source, null,
+            static function ($state, $definitions) use ($values) { return PlayerValuesLedger::grant($state, $definitions, $values); }, $sourceOwned);
     }
+
+    /** The caller commits its own durable guard in this same connection-bound transaction. */
+    public function grantFromSource(string $userId, array $values, string $operationId, int $issuedAt, string $source): array
+    { return $this->grant($userId,$values,$operationId,$issuedAt,$source,true); }
 
     /** Local operator only. Absolute correction, bounded receipt, stable ID and mandatory note. */
     public function correct(string $userId, array $values, string $note, string $operationId, string $actor = 'local-operator'): array
@@ -232,26 +246,24 @@ class PlayerValuesService
     public function history(string $userId): array
     {
         $view = $this->get($userId);
-        return ['state' => $view, 'receipts' => $this->state($userId)['receipts']];
+        return ['state' => $view, 'receipts' => []];
     }
 
-    private function mutate(string $userId, string $operationId, int $issuedAt, string $hash, string $source, ?string $note, callable $change): array
+    private function mutate(string $userId, string $operationId, int $issuedAt, string $hash, string $source, ?string $note, callable $change, bool $sourceOwned = false): array
     {
-        return $this->transaction(function () use ($userId, $operationId, $issuedAt, $hash, $source, $note, $change) {
+        return $this->transaction(function () use ($userId, $operationId, $issuedAt, $hash, $source, $note, $change, $sourceOwned) {
             $this->player($userId, true);
             $config = $this->config(false); $state = $this->state($userId); $now = ($this->clock)();
             try {
-                $receipt = PlayerValuesLedger::receipt($state, $operationId, $hash);
+                $receipt = $sourceOwned ? null : PlayerValuesLedger::receipt($state, $operationId, $hash);
                 if ($receipt !== null) return PlayerValuesLedger::view($userId, $config, $state, $now,
-                    ['operationId' => $operationId, 'replayed' => true, 'applied' => $receipt['applied'], 'items' => $receipt['items'] ?? []]);
-                PlayerValuesLedger::checkWindow($state, $issuedAt, $now);
+                    ['operationId' => $operationId, 'replayed' => true, 'applied' => [], 'items' => []]);
+                if (!$sourceOwned) PlayerValuesLedger::checkWindow($state, $issuedAt, $now);
                 $initialized = PlayerValuesLedger::initialize($state, $config['definitions'], $now);
                 $changed = $change($initialized, array_column($config['definitions'], null, 'key'));
                 [$next, $applied] = $changed; $items = $changed[2] ?? [];
-                $receipt = ['operationId' => $operationId, 'payloadHash' => $hash, 'source' => $source,
-                    'issuedAt' => PlayerValuesLedger::instant($issuedAt), 'recordedAt' => PlayerValuesLedger::instant($now),
-                    'issuedAtMillis' => $issuedAt, 'recordedAtMillis' => $now, 'applied' => $applied, 'note' => $note, 'items' => $items];
-                $next = PlayerValuesLedger::record($next, $receipt, $now);
+                $next = $sourceOwned ? PlayerValuesLedger::advance($next) : PlayerValuesLedger::record($next,
+                    ['operationId'=>$operationId, 'payloadHash'=>$hash, 'issuedAtMillis'=>$issuedAt], $now, $this->limits['receipts']);
                 $this->save($userId, $next);
                 return PlayerValuesLedger::view($userId, $config, $next, $now, ['operationId' => $operationId, 'replayed' => false, 'applied' => $applied, 'items' => $items]);
             } catch (PlayerValuesFailure $failure) {

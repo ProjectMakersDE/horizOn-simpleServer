@@ -71,13 +71,13 @@ class PlayerValuesLedger
         return array_key_exists($key, $data) ? $data[$key] : $default;
     }
 
-    public static function config(array $request): array
+    public static function config(array $request, int $definitionLimit = 64, int $offerLimit = 1000): array
     {
         if (strlen(json_encode($request, JSON_THROW_ON_ERROR)) > 1048576) {
             self::fail('INVALID_REQUEST', 'Configuration exceeds 1 MiB', 400);
         }
         $definitions = [];
-        foreach (self::list(self::field($request, 'definitions', []), 64) as $definition) {
+        foreach (self::list(self::field($request, 'definitions', []), $definitionLimit) as $definition) {
             if (!is_array($definition)) self::fail('INVALID_REQUEST', 'Invalid definition', 400);
             $key = self::key($definition['key'] ?? null);
             if (isset($definitions[$key])) self::fail('INVALID_REQUEST', 'Duplicate value key', 400);
@@ -100,14 +100,15 @@ class PlayerValuesLedger
             ];
         }
         $offers = [];
-        foreach (self::list(self::field($request, 'offers', []), 1000) as $offer) {
+        foreach (self::list(self::field($request, 'offers', []), $offerLimit) as $offer) {
             if (!is_array($offer)) self::fail('INVALID_REQUEST', 'Invalid offer', 400);
             $key = self::key($offer['key'] ?? null);
             if (isset($offers[$key])) self::fail('INVALID_REQUEST', 'Duplicate offer key', 400);
+            if (isset($offer['purchasesPerDay'])) self::fail('INVALID_REQUEST', 'Per-offer daily purchase limits are no longer supported', 400);
             $normalized = [
                 'key' => $key, 'name' => self::text($offer['name'] ?? null, 120, 'name'),
                 'active' => self::boolean(self::field($offer, 'active', true)),
-                'purchasesPerDay' => isset($offer['purchasesPerDay']) ? self::integer($offer['purchasesPerDay'], 1, 1000000) : null,
+                'purchasesPerDay' => null,
             ];
             foreach (['costs', 'rewards'] as $side) {
                 $entries = self::list(self::field($offer, $side, $side === 'rewards' ? [] : null), 8);
@@ -171,6 +172,9 @@ class PlayerValuesLedger
         return $state;
     }
 
+    public static function isPublicOperation(string $id): bool { return preg_match('/^[0-9]{1,16}:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/iD', $id) === 1; }
+    public static function canonicalOperation(string $id): string { return self::isPublicOperation($id) ? self::issuedAt($id).':'.strtolower(substr($id,strpos($id,':')+1)) : $id; }
+
     public static function issuedAt($operationId): int
     {
         if (!is_string($operationId) || !preg_match('/^([0-9]{1,16}):[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/iD', $operationId, $match)) {
@@ -189,7 +193,7 @@ class PlayerValuesLedger
     public static function receipt(array $state, string $id, string $hash): ?array
     {
         foreach ($state['receipts'] as $receipt) {
-            if ($receipt['operationId'] !== $id) continue;
+            if (self::canonicalOperation($receipt['operationId']) !== self::canonicalOperation($id)) continue;
             if (!hash_equals($receipt['payloadHash'], $hash)) self::fail('OPERATION_CONFLICT', 'operationId already used for a different request', 409);
             return $receipt;
         }
@@ -207,9 +211,6 @@ class PlayerValuesLedger
     public static function purchase(array $state, array $definitions, ?array $offer): array
     {
         if ($offer === null || !$offer['active']) self::fail('OFFER_NOT_FOUND', 'Offer not found', 404);
-        $count = $state['offerPurchases'][$offer['key']] ?? 0;
-        if (($count === 0 && count($state['offerPurchases']) >= 1000) || $count >= 2147483647 ||
-            ($offer['purchasesPerDay'] !== null && $count >= $offer['purchasesPerDay'])) self::fail('DAILY_LIMIT_REACHED', 'Daily offer limit reached');
         $deltas = [];
         foreach ($offer['costs'] as $cost) {
             $key = $cost['key']; $balance = $state['values'][$key] ?? 0;
@@ -221,7 +222,7 @@ class PlayerValuesLedger
             self::credit($state, $definitions, $reward['key'], $reward['amount']);
             $deltas[$reward['key']] = ($deltas[$reward['key']] ?? 0) + $reward['amount'];
         }
-        $state['offerPurchases'][$offer['key']] = $count + 1;
+        $state['offerPurchases'] = [];
         return [$state, self::amounts($deltas)];
     }
 
@@ -269,18 +270,26 @@ class PlayerValuesLedger
         return [$state, $values];
     }
 
-    public static function record(array $state, array $receipt, int $now): array
+    public static function record(array $state, array $receipt, int $now, int $limit = self::RECEIPTS): array
     {
         $all = array_merge($state['receipts'], [$receipt]);
         $fresh = array_values(array_filter($all, static function (array $entry) use ($now) {
-            return $entry['recordedAtMillis'] >= $now - self::RETENTION_MS;
+            return $entry['issuedAtMillis'] >= $now - self::RETENTION_MS;
         }));
-        $retained = array_slice($fresh, -self::RECEIPTS);
+        $retained = array_slice($fresh, -$limit);
         $ids = array_fill_keys(array_column($retained, 'operationId'), true);
         foreach ($all as $entry) {
             if (!isset($ids[$entry['operationId']])) $state['evictedThroughMillis'] = max($state['evictedThroughMillis'], $entry['issuedAtMillis']);
         }
-        $state['receipts'] = $retained;
+        $state['receipts'] = array_map(static function ($row) { return ['operationId'=>self::canonicalOperation($row['operationId']), 'payloadHash'=>$row['payloadHash'],
+            'issuedAtMillis'=>$row['issuedAtMillis'], 'recordedAtMillis'=>$row['issuedAtMillis'], 'source'=>'', 'applied'=>[], 'items'=>[], 'note'=>null]; }, $retained);
+        return self::advance($state);
+    }
+
+    public static function advance(array $state): array
+    {
+        $state['values'] = array_filter($state['values'], static function ($value) { return $value !== 0; });
+        $state['offerPurchases'] = [];
         $state['revision'] = self::integer($state['revision'], 0, self::MAX - 1) + 1;
         return $state;
     }
