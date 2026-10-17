@@ -1107,7 +1107,8 @@ if php tests/groups-migration.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 
 
 # ---- Items: exact JSON/canonical bytes, paid grants and SQLite/independent-process races ----
 if php tests/items-http.php "$BASE_URL" "$API_KEY" "$USER_ID" "$SESSION_TOKEN"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
-if php tests/items.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/items.php
+php tests/items-compact.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
 if php tests/shared-objects-http.php "$BASE_URL" "$API_KEY" "$USER_ID" "$SESSION_TOKEN"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 if php tests/shared-objects.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi

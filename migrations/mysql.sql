@@ -289,6 +289,11 @@ CREATE TABLE IF NOT EXISTS player_items (
     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- Immutable item bases and stable UInt16 template identities. Existing data is not backfilled.
+CREATE TABLE IF NOT EXISTS item_storage_catalog(id INT PRIMARY KEY,next_slot INT NOT NULL,next_version BIGINT NOT NULL) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS item_bases(version BIGINT PRIMARY KEY,slot INT NOT NULL,data TEXT NOT NULL,shape BINARY(32) NOT NULL,ref_count BIGINT NOT NULL,INDEX idx_item_basis_shape(slot,shape,version)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS item_template_storage(item_key VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY,slot INT NOT NULL UNIQUE,version BIGINT NOT NULL) ENGINE=InnoDB;
+
 -- Shared Objects: bounded binary keyset metadata plus separate opaque bytes, explicit atomic refunds.
 CREATE TABLE IF NOT EXISTS shared_object_catalog (id INT PRIMARY KEY, revision BIGINT NOT NULL, total INT NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS shared_object_collections (collection_key VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY, revision BIGINT NOT NULL, data TEXT NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
