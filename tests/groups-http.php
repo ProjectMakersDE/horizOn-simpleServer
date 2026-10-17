@@ -1,6 +1,7 @@
 <?php
 
 declare(strict_types=1);
+require_once __DIR__.'/inbox-fixtures.php';
 $base = $argv[1] ?? ''; $key = $argv[2] ?? ''; $actor = $argv[3] ?? ''; $token = $argv[4] ?? '';
 if (!preg_match('/^http:\/\/localhost:[0-9]{1,5}\/api\/v1\/app$/D',$base) || $key !== 'test-key-integration-12345') throw new RuntimeException('Only the integration suite loopback fixture is permitted');
 $passed = 0;
@@ -76,7 +77,7 @@ $command('transfer',$actor,$token,['targetUserId' => $peer]); $left = $command('
 require_once __DIR__ . '/../src/Core/Database.php'; require_once __DIR__ . '/../src/Inbox/InboxService.php';
 $pdo = new PDO('sqlite:' . __DIR__ . '/../data/test_horizon_integration.db',null,null,[PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
 $inbox = new InboxService($pdo); $now = Database::nowMillis(); $content = ['type' => 'fixture','textKey' => 'fixture','expiresAt' => InboxRules::instant($now + InboxRules::RETENTION)];
-for ($i = count($inbox->get($third)['entries']);$i < 50;$i++) $inbox->deliver($third,$content,'groups-http-full:' . $i,$now,'fixture'); $pdo = null;
+fillInboxFixture($pdo,$third,$now); $pdo = null;
 [$status,$failure] = api('POST','/groups/' . $fullId . '/accept-request',['userId' => $actor,'expectedRevision' => $requested['group']['revision'],'targetUserId' => $third,'requestId' => $request],$token); check(409,$status,'Full Inbox refuses group action'); check('INBOX_FULL',$failure['code'],'Full Inbox code');
 [, $unchanged] = api('GET','/groups/' . $fullId . '/pending?userId=' . $actor,null,$token); check($request,$unchanged['joinRequests'][0]['requestId'],'Full Inbox retains original pending');
 [, $stillPublic] = api('GET','/groups/' . $fullId . '?userId=' . $third,null,$thirdToken); check(1,$stillPublic['memberCount'],'Full Inbox prevents partial membership'); check(false,array_key_exists('data',$stillPublic),'Rejected requester remains nonmember');
