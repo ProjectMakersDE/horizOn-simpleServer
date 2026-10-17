@@ -107,6 +107,16 @@ try {
     $unknown=$compact; $unknown['extra']='data'; failCompact('MIGRATION_REQUIRED',static function()use($unknown,$config){PlayerValuesStorage::decode(json_encode($unknown),$config['knownKeys']);});
     $duplicate=$compact; $duplicate['q']=base64_encode(str_repeat(substr(base64_decode($compact['q']),0,57),2));
     failCompact('MIGRATION_REQUIRED',static function()use($duplicate,$config){PlayerValuesStorage::decode(json_encode($duplicate),$config['knownKeys']);});
+    // The request path honors the raised catalogue too, not just its configuration response.
+    $grant65 = array_map(static function ($d) { return ['key'=>$d['key'],'amount'=>1]; }, $definitions);
+    $correction65 = array_map(static function ($d) { return ['key'=>$d['key'],'balance'=>3]; }, $definitions);
+    $scope->run(static function () use ($service,$other,$grant65,$now) {
+        $result=$service->grantFromSource($other,$grant65,'source-65',$now,'fixture');
+        expectCompact(65,count($result['operation']['applied']),'atomic 65-value source grant');
+    });
+    $corrected=$service->correct($other,$correction65,'65-value correction',$now.':'.Database::uuid());
+    expectCompact(65,count($corrected['operation']['applied']),'atomic 65-value correction');
+    expectCompact([3],array_values(array_unique(array_column($corrected['values'],'balance'))),'all 65 balances corrected');
     echo "Compact player values: {$passed} assertions passed. Measured SQL JSON: ".strlen($beforeRollback)." bytes for 65 initialized keys, two balances, 75 guards.\n";
 } finally {
     $pdo=null; @unlink($settings);

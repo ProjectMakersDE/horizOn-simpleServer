@@ -258,7 +258,7 @@ class PlayerValuesLedger
 
     public static function grant(array $state, array $definitions, array $values): array
     {
-        $values = self::list($values, 64); $seen = [];
+        $values = self::list($values, 256); $seen = [];
         if (!$values) self::fail('INVALID_REQUEST', 'Grant needs values', 400);
         foreach ($values as $value) {
             if (!is_array($value)) self::fail('INVALID_REQUEST', 'Invalid grant value', 400);

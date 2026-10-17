@@ -55,7 +55,7 @@ try {
         $userId = strtolower($argv[2] ?? '');
         if (!preg_match('/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/D', $userId)) PlayerValuesLedger::fail('INVALID_REQUEST', 'A player UUID is required', 400);
         $result = $command === 'player' ? $service->history($userId) : $service->correct($userId,
-            PlayerValuesLedger::list($input['values'] ?? null, 64), PlayerValuesLedger::text($input['note'] ?? null, 200, 'note'),
+            PlayerValuesLedger::list($input['values'] ?? null, 256), PlayerValuesLedger::text($input['note'] ?? null, 200, 'note'),
             PlayerValuesLedger::text($input['operationId'] ?? null, 128, 'operationId'));
     }
     echo json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR) . "\n";

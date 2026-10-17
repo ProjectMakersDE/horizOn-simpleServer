@@ -197,7 +197,7 @@ class PlayerValuesService
     {
         if ($sourceOwned && !$this->transactions->isRunning()) throw new LogicException('Source-owned credit requires the existing SQL transaction');
         PlayerValuesLedger::text($operationId, 128, 'operationId'); PlayerValuesLedger::text($source, 200, 'source');
-        $values = PlayerValuesLedger::list($values, 64);
+        $values = PlayerValuesLedger::list($values, 256);
         // Validate before sorting/hashing, keeping malformed server input from coercing JSON numbers.
         foreach ($values as $value) {
             if (!is_array($value)) PlayerValuesLedger::fail('INVALID_REQUEST', 'Invalid grant', 400);
@@ -217,7 +217,7 @@ class PlayerValuesService
     /** Local operator only. Absolute correction, bounded receipt, stable ID and mandatory note. */
     public function correct(string $userId, array $values, string $note, string $operationId, string $actor = 'local-operator'): array
     {
-        $values = PlayerValuesLedger::list($values, 64);
+        $values = PlayerValuesLedger::list($values, 256);
         if (!$values) PlayerValuesLedger::fail('INVALID_REQUEST', 'Correction requires values', 400);
         $seen = [];
         foreach ($values as $value) {

@@ -1099,11 +1099,11 @@ hosted-cluster capacity or throughput claim.
 A Player Values offer gains `itemRewards:[{itemKey,quantity}]`, absent meaning `[]`.
 Costs stay positive; at least one value reward or item reward is required. Unique
 item keys have quantity1..4 and total at most4. Purchase uses its original
-`unixMillis:UUID` operation ID. Debit, daily counters, the value receipt and item
+`unixMillis:UUID` operation ID. Debit, daily counters, the value guard and item
 grant share one explicit `SqlTransaction` and PDO; full/invalid inventory rolls
-everything back. Value-only offers issue no item SQL. The purchase operation gains
-original `items:[{instanceId,itemKey}]`, default `[]` for old receipts. Replay checks
-that retained PV receipt before current offers/catalog and never recreates an
+everything back. Value-only offers issue no item SQL. The first successful purchase
+returns `items:[{instanceId,itemKey}]`. A replay returns empty `applied` and `items`,
+checks the retained PV guard before current offers/catalog and never recreates an
 already discarded item. Explicitly refresh inventory after confirmed purchase.
 
 The server-only ItemService grant provider hashes original source, timestamp and
