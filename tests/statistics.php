@@ -76,7 +76,7 @@ try {
     denied('OPERATION_EXPIRED', static function () use ($service, $user, $now) { $service->update($user, ($now - 86400001) . ':' . Database::uuid(), [['key' => 'sum', 'value' => 1]]); });
     denied('OPERATION_IN_FUTURE', static function () use ($service, $user, $op) { $service->update($user, $op(30001), [['key' => 'sum', 'value' => 1]]); });
     for ($index = 1; $index <= 10; $index++) $service->update($user, $op($index), [['key' => 'sum', 'value' => 1]]);
-    $stored = json_decode($pdo->query("SELECT data FROM statistics_state WHERE user_id = '" . $user . "'")->fetch()['data'], true);
+    $stored = StatisticsStorage::decode($pdo->query("SELECT data FROM statistics_state WHERE user_id = '" . $user . "'")->fetch()['data'], $service->config());
     verify(8, count($stored['receipts']), 'bounded receipts'); verify(true, $stored['floor'] > 0, 'persistent eviction floor');
     denied('OPERATION_EXPIRED', static function () use ($service, $user, $first, $batch) { $service->update($user, $first, $batch); });
     denied('OPERATION_EXPIRED', static function () use ($service, $user, $now) { $service->update($user, $now . ':' . Database::uuid(), [['key' => 'sum', 'value' => 1]]); });

@@ -30,7 +30,7 @@ class StatisticsRules
         if (!is_string($value) || !preg_match('/^([0-9]{13}):[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/iD', $value, $match)) self::fail('INVALID_REQUEST', 'operationId must be unixMillis:UUID');
         return (int)$match[1];
     }
-    public static function list($value, int $min = 0, int $max = 100): array
+    public static function list($value, int $min = 0, int $max = 2147483647): array
     {
         if (!is_array($value) || ($value && array_keys($value) !== range(0, count($value) - 1)) || count($value) < $min || count($value) > $max) self::fail('INVALID_REQUEST', 'Invalid list size or shape');
         return $value;
@@ -47,7 +47,7 @@ class StatisticsRules
             $bound = array_key_exists('maxPerUpdate', $definition) ? self::integer($definition['maxPerUpdate'], 1) : null;
             $prior = $old[$key] ?? null;
             $generation = $prior && $prior['mode'] === $mode && $prior['reset'] === $reset ? $prior['generation'] : $previous['version'] + 1;
-            $next[] = ['key' => $key, 'name' => $name, 'mode' => $mode, 'reset' => $reset, 'generation' => $generation] + ($bound === null ? [] : ['maxPerUpdate' => $bound]);
+            $next[] = ['key' => $key, 'name' => $name, 'mode' => $mode, 'reset' => $reset, 'generation' => $generation] + ($bound === null ? [] : ['maxPerUpdate' => $bound]) + ($prior !== null && isset($prior['slot']) ? ['slot'=>$prior['slot']] : []);
             $keys[$key] = true;
         }
         usort($next, static function ($a, $b) { return strcmp($a['key'], $b['key']); });
@@ -87,7 +87,7 @@ class StatisticsRules
     }
     public static function definitions(array $catalog, ?int $known = null): array
     {
-        $definitions = array_map(static function ($definition) { unset($definition['generation']); return $definition; }, $catalog['definitions']);
+        $definitions = array_map(static function ($definition) { unset($definition['generation'], $definition['slot']); return $definition; }, $catalog['definitions']);
         return ['definitionVersion' => $catalog['version'], 'definitions' => $known === $catalog['version'] ? null : $definitions];
     }
     public static function view(string $user, array $state, array $catalog, int $now, ?int $known = null, ?string $operation = null, bool $replayed = false): array
@@ -105,12 +105,12 @@ class StatisticsRules
     /** Receipt replay is checked before current policy, age and eviction, exactly as in Cloud. */
     public static function apply(string $user, array $state, array $catalog, string $operation, array $updates, int $now): array
     {
-        $issued = self::operation($operation); $updates = self::updates($updates);
+        $issued = self::operation($operation); $originalOperation = $operation; $operation = strtolower($operation); $updates = self::updates($updates);
         $hash = hash('sha256', implode("\n", array_map(static function ($update) { return $update['key'] . ':' . $update['value']; }, $updates)));
         foreach ($state['receipts'] as $receipt) {
             if ($receipt['id'] !== $operation) continue;
             if (!hash_equals($receipt['hash'], $hash)) self::fail('OPERATION_CONFLICT', 'Operation ID already has another payload', 409);
-            return [false, $state, self::view($user, $state, $catalog, $now, null, $operation, true)];
+            return [false, $state, self::view($user, $state, $catalog, $now, null, $originalOperation, true)];
         }
         if ($issued > $now + 30000) self::fail('OPERATION_IN_FUTURE', 'Operation timestamp is in the future', 422);
         if ($issued < $now - 86400000 || $issued <= $state['floor']) self::fail('OPERATION_EXPIRED', 'Unknown operation is expired or evicted', 410);
@@ -133,6 +133,6 @@ class StatisticsRules
         $state['revision'] = self::integer($state['revision'], 0, self::MAX - 1) + 1; $state['catalogVersion'] = $catalog['version']; $state['values'] = $cells;
         $state['receipts'][] = ['id' => $operation, 'hash' => $hash, 'at' => $issued];
         while (count($state['receipts']) > self::RECEIPTS) { $evicted = array_shift($state['receipts']); $state['floor'] = max($state['floor'], $evicted['at']); }
-        return [true, $state, self::view($user, $state, $catalog, $now, null, $operation)];
+        return [true, $state, self::view($user, $state, $catalog, $now, null, $originalOperation)];
     }
 }
