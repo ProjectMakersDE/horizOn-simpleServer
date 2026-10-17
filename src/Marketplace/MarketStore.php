@@ -42,13 +42,22 @@ class MarketStore
     public function get(string $id,bool $lock=false): ?array
     { $r=$this->one('SELECT data FROM market_listings WHERE id=?',[$id],$lock);return $r===null?null:$this->decodeListing($r['data'],$lock); }
     private function decodeListing(string $data,bool $current=false): array
-    { $v=json_decode($data,true,32,JSON_THROW_ON_ERROR);$v['ops']=$v['ops']??[];if($v['item']!==null&&!isset($v['item']['s'])){$original=json_decode($data,false,32,JSON_THROW_ON_ERROR);if(!($original->item->properties??null) instanceof stdClass)ItemStorage::required();}if($v['item']!==null)$v['item']=$this->item($v['item'],$current);return $v; }
-    private function item(array $item,bool $current=false):array
+    { return $this->decodeListings([$data],$current)[0]; }
+    /** One indexed basis batch per <=128 distinct versions, shared by all selected listings. */
+    private function decodeListings(array $data,bool $current=false): array
+    {
+        $listings=[];$items=[];
+        foreach($data as $json){$v=json_decode($json,true,32,JSON_THROW_ON_ERROR);$v['ops']=$v['ops']??[];
+            if($v['item']!==null){if(!isset($v['item']['s'])){$original=json_decode($json,false,32,JSON_THROW_ON_ERROR);if(!($original->item->properties??null) instanceof stdClass)ItemStorage::required();}$items[count($listings)]=$this->item($v['item']);}$listings[]=$v;}
+        $hydrated=(new ItemStore($this->pdo))->hydrate(array_values($items),$current);
+        foreach(array_keys($items) as $position=>$index)$listings[$index]['item']=$hydrated[$position];return $listings;
+    }
+    private function item(array $item):array
     {
         if(!isset($item['s'])){$item['properties']=(object)$item['properties'];return $item;}
         if($item['s']!==1||array_keys($item)!==['s','b'])ItemStorage::corrupt();
         $items=ItemStorage::unpack(ItemStorage::binary($item['b']));if(count($items)!==1)ItemStorage::corrupt();
-        return (new ItemStore($this->pdo))->hydrate($items,$current)[0];
+        return $items[0];
     }
     private function listingData(array $value):string
     {
@@ -72,7 +81,14 @@ class MarketStore
     { $q=$this->pdo->prepare('UPDATE market_listings SET revision=?,status=?,item_key=?,price=?,created_millis=?,due_kind=?,due_millis=?,return_owner=?,return_entry=?,create_actor=?,create_operation=?,close_actor=?,close_operation=?,data=? WHERE id=? AND revision=?');$q->execute(array_merge($this->columns($next),[$before['id'],$before['revision']]));if($q->rowCount()!==1)MarketRules::fail('STATE_CONFLICT');$this->itemReferences($before['item'],$next['item']); }
     public function remove(array $v): void { $q=$this->pdo->prepare('DELETE FROM market_listings WHERE id=? AND revision=?');$q->execute([$v['id'],$v['revision']]);if($q->rowCount()!==1)MarketRules::fail('STATE_CONFLICT');$this->itemReferences($v['item'],null); }
     public function many(array $ids): array
-    { if(count($ids)>125)throw new LogicException('Market ledger projection bound');$out=[];foreach($ids as$id){$v=$this->get($id);if($v!==null)$out[]=$v;}return$out; }
+    {
+        $byId=[];
+        foreach(array_chunk(array_values(array_unique($ids)),128) as $chunk){
+            $rows=$this->rows('SELECT data FROM market_listings WHERE id IN ('.implode(',',array_fill(0,count($chunk),'?')).')',$chunk);
+            foreach($this->decodeListings(array_column($rows,'data')) as $v)$byId[$v['id']]=$v;
+        }
+        $out=[];foreach($ids as $id)if(isset($byId[$id]))$out[]=$byId[$id];return $out;
+    }
     /** Two sargable seeks share a candidate budget; no OR residual scan or OFFSET. */
     public function page(?string $item,int $min,int $max,?array $after,int $budget=256): array
     {
@@ -84,7 +100,7 @@ class MarketStore
             else{$where[]='(price,id)>(?,?)';array_push($bind,$after['price'],$after['id']);}
             $where[]='price<=?';$bind[]=$max;
             $rows=$this->rows('SELECT data FROM market_listings'.$this->hint($index).' WHERE '.implode(' AND ',$where).' ORDER BY price,id LIMIT '.($budget-count($out)),$bind);
-            foreach($rows as$r){$out[]=$this->decodeListing($r['data']);}if(count($out)>=$budget)break;
+            $out=array_merge($out,$this->decodeListings(array_column($rows,'data')));if(count($out)>=$budget)break;
         }return$out;
     }
     public function adminPage(?string $status,?array $after,int $limit): array

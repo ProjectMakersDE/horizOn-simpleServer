@@ -1788,10 +1788,17 @@ Set a price rule (`active`, positive safe-integer `minPrice`/`maxPrice`), then e
 with `enabled`, `currencyKey` and integer `feeBps`0..10000. Currency follows the existing PV key
 grammar, including `chest.gold`, `gold-coin` and `1coin`. The quoted currency/fee remain frozen
 on each listing. Fees use exact integer floor arithmetic;100% fee deliberately credits zero.
-The local installation defaults to Enterprise bounds:25 open escrows/player,10000 retained
-listings,100 history references/player,120 accepted create/buy per
-project minute and1000ms/player cooldown. `MarketRules::limits()` exposes all five nominal
-profiles; a downgrade never destroys held items. Matching retained originals precede current
+The local installation defaults to25 open escrows/player,10000 retained listings,
+100 history references/player and120 accepted create/buy per project minute. Configure these
+positive Int32 policies through `MARKETPLACE_OPEN_LISTINGS`, `MARKETPLACE_RETAINED_LISTINGS`,
+`MARKETPLACE_HISTORY` and `MARKETPLACE_WRITES_PER_MINUTE`; values above the defaults are accepted.
+`MARKETPLACE_LEGACY_RECEIPTS=100` advertises the existing compatibility field independently.
+New price rules use the configured `ITEMS_CATALOG` admission quota; existing rule edits and
+stored offers remain readable after lowering it. `MarketRules::limits()` still exposes all five
+nominal tariff profiles. Reducing quotas does not truncate stored references on reads or prevent
+safe cancellation/return of existing escrow. A later terminal transition retains the configured
+number of history references; its authoritative original receipt stays on the source listing.
+Matching retained originals precede current
 ban/config/rate limits. Each listing stores at most two compact operation entries: actor, UUID,
 kind, issued time, SHA256 hex64 intent hash, committed revision and time. The existing receipt
 response is derived from these entries and the listing's immutable item/price/fee fields.
@@ -1828,9 +1835,20 @@ That write removes all old receipts and raises the floor through every old issue
 migration adds nullable SQL index projections without scanning or copying old receipt/escrow JSON.
 Search returns at most50 offers from at most256 indexed candidates, including explicit empty
 continuation pages; callers advance pages explicitly. No automatic polling or sale fanout.
+These page/candidate bounds,1000ms player cooldown,300..604800-second listing duration,
+7-day terminal detail retention,30-day operation window, two source operation slots and eight
+recovery audit entries remain explicit protocol/lifecycle bounds, separate from operator quotas.
+Retained player references load in128-ID SQL batches and preserve their stored order, including
+after quota reductions. Compact original items share each batch's immutable-basis lookup rather
+than reading a basis separately per listing. Public/admin pages use the same grouped hydration.
 
 Local SQL command profiles (excluding HTTP auth/bootstrap) are measured separately from Mongo
-profiles and capacity: initial create10 SELECT/4 DML and buy15 SELECT/7 DML in the functional
-fixture. `tests/marketplace.php` prints the measured counts. Sparse database/index allocation
+profiles and capacity: compact original create13 SELECT/6 DML and buy17 SELECT/9 DML in the functional
+fixture. `tests/marketplace.php` prints the measured counts. `tests/marketplace-limits.php`
+also checks2051 open and151 history references:19 listing reads plus17 shared basis reads
+(one repeated basis across the open batches), excluding the active-user/player-state reads.
+These costs grow with stored references and distinct bases;128 is a query batch size, not a
+product limit. No SQL schema or stored listing/player format changes in this parity update.
+Sparse database/index allocation
 is not a per-player capacity guarantee. Run `bash tests/test.sh`; dedicated tests also support
 an explicit loopback `HORIZON_MARKET_TEST_DSN` whose database must match `task1015_<hex>`.

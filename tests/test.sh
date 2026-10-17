@@ -1126,6 +1126,7 @@ if php tests/matches-migration.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL +
 if python3 tests/matches-seek.py; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 if php tests/marketplace-http.php "$BASE_URL" "$API_KEY"; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); fi
 if php tests/marketplace.php; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); fi
+if php tests/marketplace-limits.php; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); fi
 if php tests/marketplace-migration.php; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); fi
 
 if php tests/items-migration.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
