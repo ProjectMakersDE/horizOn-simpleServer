@@ -1639,32 +1639,44 @@ or timeout grants currency, items, rewards or an inferred winner.
 The response envelopes match the hosted ordinary contract, with explicit nulls
 and `serverTime`. Point/actions return `{match,pollAfterSeconds,serverTime}`;
 create also returns `playerRevision`, result also `replayed`. MyMatches returns
-`{userId,revision,active,invites,recent,limits,pollAfterSeconds,serverTime}` and
+`{userId,revision,active,invites,recent,pendingResults,limits,pollAfterSeconds,serverTime}` and
 search/list returns `{matches,nextCursor,pollAfterSeconds,serverTime}`. Summaries
 contain no bytes, reports or run IDs. `recent` can contain an active match when
 the current player already forfeited. Invited-only lobby viewers and successful
 decline/pre-start leave acknowledgements receive `dataBase64:null,reports:[]`;
 their subsequent point GET returns404. Polling is explicit, with a120-second hint.
 
-One installation is one project. The default self-hosted bounds are10 active
-matches,8192 decoded state bytes,100 retained match references and20 pending
-invitations per player. Deployments embedding `MatchService` can pass lower
-limits; `MatchRules::limits()` defines all five hosted tiers:
+One installation is one project. Editable defaults are `MATCHES_ACTIVE=10`,
+`MATCHES_STATE_BYTES=8192`, `MATCHES_RETAINED=100`, `MATCHES_PENDING_INVITES=20`,
+`MATCHES_SETTLEMENT=100`, `MATCHES_HISTORY_RETENTION_SECONDS=604800` and
+`MATCHES_RANKED_SETTLEMENT_SECONDS=604800`. Positive counts/durations accept Int32 values
+above those defaults. Completed count and history duration explicitly allow zero.
+`MatchRules::limits()` provides the nominal hosted profiles; Free has zero completed
+history and zero completed-detail retention. The local installation uses its configured
+policy independently of a hosted subscription. PHP keeps `matchesRanked:false`, ranked
+create/run501 and `pendingResults:[]`; no ranked source or reward is fabricated.
 
-| Tier | Active | State bytes | Retained | Pending invites |
-|---|---:|---:|---:|---:|
-| FREE | 2 | 1024 | 20 | 20 |
-| BASIC | 3 | 2048 | 30 | 20 |
-| PLUS | 4 | 3072 | 40 | 20 |
-| PRO | 5 | 4096 | 50 | 20 |
-| ENTERPRISE | 10 | 8192 | 100 | 20 |
+The existing portable MySQL payload column is `BLOB`:65535 decoded bytes is an explicit
+technical PHP storage bound, rather than an8192-byte product maximum. Larger configuration
+is rejected clearly; it is never silently capped. The Base64/JSON parser accepts the complete
+65535-byte frame, including normally escaped Base64 slashes (600000-byte raw JSON safety
+frame also covers fully JSON-escaped Base64). Existing larger SQLite payloads remain readable and cancellable after a
+lower configured limit. The existing MySQL player `TEXT` record likewise has a65535-byte
+serialized frame; an admission that would grow beyond it fails before DML. No fixed reference
+count substitutes for that measured byte bound. Pre-existing larger SQLite player records
+remain readable and can shrink. See the [MySQL BLOB/TEXT reference](https://dev.mysql.com/doc/refman/8.4/en/blob.html).
 
-Invitations reserve no active/history slot until accepted. Create/join reserve
-both slots atomically. Lower limits block new reservations without deleting
-retained history or active games. Lobbies expire after24 hours; started matches
-have a30-day absolute deadline, reports24 hours and terminal history7 days.
-Reads do not advance timeouts or perform cleanup. Player revision anchors survive
-ordinary leave/cancel and empty histories, preventing uncertain-create ABA.
+Invitations reserve only invitation capacity. Create/join atomically reserve active and
+settlement slots. Reporting releases the active slot and keeps its settlement reservation;
+completion releases settlement. Completed history never blocks starting another open match.
+Reducing policy keeps existing reads and safe leave/cancel operations. Terminal count and
+age policy is applied only by explicit bounded cleanup, apart from the new terminal row's
+stored expiry. A zero policy makes its detail immediately unavailable: its successful terminal
+response still contains the committed result; later point GET or identical result replay may
+return `MATCH_NOT_FOUND`. This never authorizes a new match, operation or reward. Player
+revision anchors survive ordinary leave/cancel and empty histories, preventing create ABA.
+Lobbies expire after24 hours, started matches after30 days and open reports after24 hours.
+Reads never advance transitions or run cleanup.
 
 Operator equivalents reject HTTP before configuration or database access:
 
@@ -1678,24 +1690,57 @@ php bin/matches.php cancel MATCH_UUID EXPECTED_MATCH_REVISION
 php bin/matches.php cleanup
 php bin/matches.php cleanup-scheduled
 php bin/matches.php cleanup-deleted [AFTER_USER_UUID]
+php bin/matches.php compact-check details - 10
+php bin/matches.php compact-check players - 10
+php bin/matches.php compact-apply details - 10 writers-stopped backup-restored
+php bin/matches.php compact-apply players - 10 writers-stopped backup-restored
 ```
 
-Configuration input is `{ "rankedLeaderboardKey": null }`. Schedule cleanup:
-each ordinary sweep examines at most20 due rows with a persistent fixed-cutoff
-`dueAt,UUID` cursor. Full Inbox, contention and failed rows do not prevent later
-rows from being visited. Operator and scheduled sweeps have separate cursors.
-Deleted-user housekeeping handles one indexed nullable-FK player anchor and at
-most20 of its120 bounded references per call; retain its continuation until
-complete. Do not disable foreign keys or erase retained revision anchors manually.
+Configuration input is `{ "rankedLeaderboardKey": null }`. Each cleanup call examines at
+most20 combined candidates. Due transitions/notices use the existing fixed-cutoff `dueAt,UUID`
+seek; count/age trimming uses separate indexed `(status,UUID)` terminal phases. Independent
+persisted cursors alternate priority, reusing unused capacity without exceeding20. Full Inbox,
+contention and failures advance the relevant cursor so later rows remain reachable. Operator
+and scheduled sweeps remain independent. Deleted-player cleanup uses20 references per page
+and retains its continuation; it is based on actual stored references, without the old120 cap.
+Keep foreign keys and minimal revision anchors intact.
 
-Metadata, summary pages and BLOBs use separate storage. A point read checks the
-payload revision and byte length in one snapshot; list/search never fetch blobs.
+The existing SQL tables and indexes remain. Indexed scalar columns own their values once;
+`matches_state.summary` stores the remaining compact header, with packed16-byte participant
+UUIDs, role indices and flags. `data` contains only packed reports: participant index1B,
+final revision8B, reported milliseconds8B, winner mask1B, result length2B and original result
+bytes (at most256), little endian. Header and reports are never copied into each other.
+The separate raw payload remains revision-paired. Player data stores each match UUID once
+with one role byte: active/detail/invited/settlement/closed; completed detail edges add their
+8-byte finish time for count trimming. Base64 is explicit SQL/JSON representation overhead,
+not omitted from measurements. Existing UUID SQL keys, nullable user anchors, revisions,
+indexed scalar projections and B-tree costs remain additional stored bytes.
+
+A point read checks the payload type/revision/length in its snapshot. Public/list/Inbox source
+reads select only header/index projections; they never transfer payloads or report blobs.
+The pure shared notice accessor binds current participant, deadline and consumed generation.
+An old generation cannot revive after a report or unrelated revision change.
+
+Cold conversion is a separate local operator action, never an authentication/read hook.
+Before applying, stop **all** old writers and upgrade every writer/reader together; independently
+back up and restore the original database. The two explicit acknowledgements attest those
+operator checks, rather than automatically proving them. `compact-check` and `compact-apply`
+accept `details|players`, original UUID cursor and page1..20. Continue the returned cursor until
+`complete`; details and players have separate cursors. Each row converts in its SQL transaction,
+with original-version/JSON CAS. Detail conversion validates its original paired payload but does
+not rewrite it, execute game transitions, expire history, send notices or manufacture reports.
+Unknown JSON fields, duplicate keys, lossy numbers, malformed masks/indices and unknown binary
+formats fail `MIGRATION_REQUIRED` with originals unchanged. A failed page has no advanced cursor;
+retry its input after reconciliation, and already converted rows are idempotent. Normal mutations
+also validate the entire original dialect before writing the compact encoding. There is no schema
+DDL, extra index, migration scheduler or automatic operational cutover in this change.
+
 Every mutation joins one explicit connection-bound `SqlTransaction`. MySQL uses
 current row locks plus CAS against the initial snapshot; a failed nested mutation
 rolls back to a savepoint even if its caller catches the error. Public reads own
 their consistent snapshot and reject opaque external MySQL transactions.
-Normal turns/reports compute membership differences before reading player
-ledgers, so unchanged peers cause zero history reads or writes. Open search
+Normal turns/reports compute role differences before reading player ledgers; unchanged
+peers cause zero player reads/writes. Terminal transitions update the changed closed/settlement roles. Open search
 consumes at most256 summary candidates and returns at most50; current bilateral
 blocks and active owners are checked in bounded projections. A filtered empty
 page can carry a continuation. Cursors bind project, actor and strength bounds.
@@ -1727,7 +1772,7 @@ limiting and schema/bootstrap. SQLite point GET is3 SELECT/0 DML, open search
 turn including delivery6/4 and immutable report3/1. Writes also begin/commit each
 scope; an Inbox handoff adds its separate scope. PDO transaction-method calls are
 not SQL statement counts. Block checks are bounded by256 candidates with up to8
-participants each, each existing block list by100 IDs. These are bounded
+participants each, each existing block list under its Friends contract. These are bounded
 statement/row envelopes, not latency, maximum capacity or hosted throughput claims.
 The actual MySQL8.4 profiles are point3 SELECT/0 DML, open search4/0, create with
 one invite8/4, start including Inbox10/3, ordinary turn including Inbox8/4 and

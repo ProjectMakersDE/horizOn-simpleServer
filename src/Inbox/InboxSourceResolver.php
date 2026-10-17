@@ -3,6 +3,7 @@
 declare(strict_types=1);
 require_once __DIR__.'/InboxStorage.php';
 require_once __DIR__.'/../Items/ItemStorage.php';
+require_once __DIR__.'/../Matches/MatchStorage.php';
 
 /** Bounded source metadata only; opaque Match payloads and item catalogues are never loaded. */
 class InboxSourceResolver
@@ -64,10 +65,10 @@ class InboxSourceResolver
         }
         foreach(array_chunk(array_values(array_filter($entries,static function($e){return $e['kind']===6;})),200)as$batch){
             $ids=array_values(array_unique(array_column($batch,'sourceId')));
-            $rows=$this->rows("SELECT id,JSON_OBJECT('revision',revision,'status',JSON_EXTRACT(data,'$.status'),'currentPlayerId',JSON_EXTRACT(data,'$.currentPlayerId'),'turnDeadline',JSON_EXTRACT(data,'$.turnDeadline'),'noticeGeneration',JSON_EXTRACT(data,'$.noticeGeneration')) AS data FROM matches_state WHERE id IN (".self::placeholders($ids).')',$ids);
+            $q=$this->pdo->prepare('SELECT '.MatchStorage::SQL_FIELDS.",summary,CASE WHEN JSON_EXTRACT(summary,'$.v')=1 THEN NULL ELSE JSON_EXTRACT(data,'$.noticeGeneration') END AS legacy_notice_generation FROM matches_state WHERE id IN (".self::placeholders($ids).')');$q->execute($ids);$rows=[];foreach($q->fetchAll(PDO::FETCH_ASSOC) as $row)$rows[$row['id']]=$row;
             foreach($batch as$e){$row=$rows[$e['sourceId']]??null;if($row===null)continue;
-                if($row['status']==='active'&&$row['currentPlayerId']===$user&&$row['turnDeadline']===$e['expiresAtMillis']&&$row['noticeGeneration']===$e['issuedAtMillis'])
-                    $put($e,$e['sourceId'],['matchId'=>$e['sourceId'],'revision'=>(string)self::integer($row['revision'])],$row['revision']);}
+                if(MatchStorage::turnNoticeMatches($row,$user,$e['expiresAtMillis'],$e['issuedAtMillis'])){
+                    $revision=MatchStorage::sqlNumber($row['revision']);$put($e,$e['sourceId'],['matchId'=>$e['sourceId'],'revision'=>(string)$revision],$revision);}}
         }
         foreach(array_chunk(array_values(array_filter($entries,static function($e){return $e['kind']===7;})),200)as$batch){
             $ids=array_values(array_unique(array_column($batch,'sourceId')));
