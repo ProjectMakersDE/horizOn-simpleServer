@@ -15,7 +15,12 @@ try{
     }
     $migration=in_array($command,['inspect-plan','apply-plan','cleanup-plan'],true);
     // Offline inspection never bootstraps or rewrites a database. Upgrade schema separately under maintenance.
-    if(!$migration)Database::migrate();$pdo=Database::connect();$service=new GiftCodesService($pdo);
+    if(!$migration)Database::migrate();
+    if($command==='inspect-plan'&&Config::get('DB_DRIVER','sqlite')==='sqlite'){
+        $path=realpath(Config::get('DB_PATH','./data/horizon.db'));if($path===false||!is_file($path))throw new RuntimeException('Existing database required');
+        $pdo=new PDO('sqlite:'.$path,null,null,[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION,PDO::ATTR_DEFAULT_FETCH_MODE=>PDO::FETCH_ASSOC,PDO::SQLITE_ATTR_OPEN_FLAGS=>PDO::SQLITE_OPEN_READONLY]);
+    }else $pdo=Database::connect();
+    $service=new GiftCodesService($pdo);
     if($command==='statistics')$result=$service->statistics();
     elseif($command==='values'||$command==='set-values')$result=$service->configureValues($argv[2]??'',$request);
     elseif($command==='create'){$request['code']=$argv[2]??'';$result=$service->create($request);}
