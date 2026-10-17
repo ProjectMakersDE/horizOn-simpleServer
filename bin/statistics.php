@@ -15,7 +15,12 @@ try {
         $body = json_decode(stream_get_contents(STDIN), true, 512, JSON_THROW_ON_ERROR);
         if (!is_array($body) || !isset($body['definitions'])) StatisticsRules::fail('INVALID_REQUEST', 'Expected a definitions array');
         $result = $service->configure(StatisticsRules::list($body['definitions']), (int)$argv[2]);
-    } else StatisticsRules::fail('INVALID_REQUEST', 'Usage: php bin/statistics.php show | configure <expectedVersion> < catalog.json');
+    } elseif ($command === 'compact-page') {
+        $after = ($argv[2] ?? '-') === '-' ? null : $argv[2];
+        $limit = $argv[3] ?? '50';
+        if (!preg_match('/^[1-9][0-9]?$/D', $limit)) StatisticsRules::fail('INVALID_REQUEST', 'Page size must be1..50');
+        $result = $service->migrateStatePage($after, (int)$limit);
+    } else StatisticsRules::fail('INVALID_REQUEST', 'Usage: php bin/statistics.php show | configure <expectedVersion> < catalog.json | compact-page [after|-] [1..50]');
     echo json_encode($result, JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT) . PHP_EOL;
 } catch (StatisticsFailure $failure) { fwrite(STDERR, $failure->errorCode . ': ' . $failure->getMessage() . PHP_EOL); exit(1); }
 catch (Throwable $failure) { fwrite(STDERR, "Configuration failed; verify the local database/settings and JSON input\n"); exit(1); }

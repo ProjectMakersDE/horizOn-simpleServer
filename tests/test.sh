@@ -1020,6 +1020,7 @@ assert_status 'statistics ID payload conflict is409' 409 "$ST_CONFLICT"
 ST_ADMIN=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$TEST_PORT/api/v1/admin/statistics/definitions" -H "X-API-Key: $API_KEY")
 assert_status 'statistics operator configuration is never an app admin route' 404 "$ST_ADMIN"
 if php tests/statistics.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/statistics-compact.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
 # ---- Achievements: hidden metadata, manual guard and atomic statistic integration ----
 php bin/achievements.php configure 0 <<'JSON' >/dev/null
