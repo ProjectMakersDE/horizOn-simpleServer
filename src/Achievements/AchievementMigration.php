@@ -45,7 +45,7 @@ class AchievementMigration
                 }
                 if($record['rewardState']==='delivered'){
                     if($record['pending']!==null||$record['inboxEntryId']===null)AchievementStorage::required();
-                    $inbox->settle($user,$record['inboxEntryId'],$source,$record['issuedAt']);
+                    $inbox->settle($user,$record['inboxEntryId'],$source,$record['issuedAt'],$key);
                 }elseif($record['rewardState']==='pending'){
                     $original=$record['pending'];
                     if(!is_array($original)||$record['inboxEntryId']!==null||$original['type']!=='achievement'||$original['reference']!==$key||empty($original['attachment']['values'])||isset($original['attachment']['itemReturn']))AchievementStorage::required();

@@ -53,6 +53,10 @@ try{
   fails('MIGRATION_REQUIRED',static function()use($migration,$id){$migration->player($id);});same($before,$raw($id),'unknown original shape retained');
   $q=$pdo->prepare('SELECT COUNT(*) FROM player_values WHERE user_id=?');$q->execute([$id]);same(0,(int)$q->fetchColumn(),'unknown reward never partially credited');
  }
+ // A valid source UUID alone must not bind a message for a different achievement key.
+ $wrongKey=$user();$r=$old('second');$source='achievement:'.$r['sourceId'];
+ $r['inboxEntryId']=$inbox->deliver($wrongKey,$r['pending'],$source,$now,$source)['entryId'];$r['key']='old';$r['pending']=null;$r['rewardState']='delivered';$seed($wrongKey,[$r]);$before=$raw($wrongKey);
+ fails('MIGRATION_REQUIRED',static function()use($migration,$wrongKey){$migration->player($wrongKey);});same($before,$raw($wrongKey),'wrong content identity preserved');
  // Legacy value guard claiming a credit while the Inbox flag says unclaimed is contradictory.
  $ambiguous=$user();$r=$delivered($ambiguous);$operation='inbox:'.$r['inboxEntryId'];$values->grant($ambiguous,[['key'=>'coins','amount'=>3]],$operation,$now,$operation);$before=$raw($ambiguous);
  fails('MIGRATION_REQUIRED',static function()use($migration,$ambiguous){$migration->player($ambiguous);});same($before,$raw($ambiguous),'contradiction preserves source');same(3,$values->get($ambiguous)['values'][0]['balance'],'contradiction never credits twice');

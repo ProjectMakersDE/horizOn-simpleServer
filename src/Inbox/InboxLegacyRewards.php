@@ -43,12 +43,13 @@ class InboxLegacyRewards
         foreach($state['entries'] as $entry)if($entry['sourceOperationId']===$source)$this->required();
         foreach($state['receipts'] as $receipt)if($receipt['operationId']===$source)$this->required();
     }
-    public function settle(string $user,string $entryId,string $source,int $issued): void {
+    public function settle(string $user,string $entryId,string $source,int $issued,string $achievementKey): void {
         [$raw,$state]=$this->state($user);$matches=[];
         foreach($state['entries'] as $i=>$entry)if($entry['id']===$entryId||$entry['sourceOperationId']===$source)$matches[$i]=$entry;
         if(count($matches)!==1)$this->required();$index=array_key_first($matches);$entry=$matches[$index];
         if(array_diff(array_keys($entry),['id','content','createdAt','read','claimed','sourceOperationId','payloadHash'])||count($entry)!==7)$this->required();
         $content=self::content($entry['content']);
+        if($content['type']!=='achievement'||$content['reference']!==$achievementKey)$this->required();
         if($entry['id']!==$entryId||$entry['sourceOperationId']!==$source||!is_bool($entry['claimed'])||
             !hash_equals(InboxRules::hash($content,$source,$issued),$entry['payloadHash']))$this->required();
         foreach($state['receipts'] as $receipt)if($receipt['operationId']===$source&&($receipt['entryId']!==$entryId||!hash_equals($receipt['payloadHash'],$entry['payloadHash'])))$this->required();
