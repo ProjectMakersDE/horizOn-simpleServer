@@ -277,7 +277,7 @@ CREATE TABLE IF NOT EXISTS group_members (
     FOREIGN KEY(group_id) REFERENCES groups_state(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS group_pending_references (
-    user_id CHAR(36) NOT NULL, group_id CHAR(36) NOT NULL, PRIMARY KEY(user_id,group_id),
+    user_id CHAR(36) NOT NULL, group_id CHAR(36) NOT NULL, target_kind TINYINT NULL, PRIMARY KEY(user_id,group_id),
     INDEX idx_group_pending_group(group_id,user_id), FOREIGN KEY(group_id) REFERENCES groups_state(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -360,3 +360,6 @@ CREATE TABLE IF NOT EXISTS market_maintenance(kind VARCHAR(32) CHARACTER SET asc
 
 -- Request identity index only, no duplicated pending payload or player list.
 CREATE TABLE IF NOT EXISTS group_inbox_sources(request_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY,group_id CHAR(36) NOT NULL,INDEX idx_group_inbox_group(group_id,request_id),FOREIGN KEY(group_id) REFERENCES groups_state(id) ON DELETE CASCADE) ENGINE=InnoDB;
+
+-- One project migration fence; no player/source payload copy.
+CREATE TABLE IF NOT EXISTS group_storage(id INT PRIMARY KEY,revision BIGINT NOT NULL,cursor_group CHAR(36) NULL,ready TINYINT NOT NULL) ENGINE=InnoDB;

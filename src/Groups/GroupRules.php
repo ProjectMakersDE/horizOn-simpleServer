@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 require_once __DIR__ . '/../Inbox/InboxRules.php';
+require_once __DIR__ . '/GroupLimits.php';
 
 class GroupFailure extends RuntimeException
 {
@@ -28,24 +29,25 @@ class GroupRules
         if (!is_int($value) || $value < 0 || $value > self::MAX) self::fail('INVALID_REVISION', 400);
         return $value;
     }
-    public static function page($limit): int
+    public static function page($limit, int $maximum = 2147483647): int
     {
-        if (!is_int($limit) || $limit < 1 || $limit > 50) self::fail('INVALID_PAGE', 400);
+        if (!is_int($limit) || $limit < 1 || $limit > $maximum) self::fail('INVALID_PAGE', 400);
         return $limit;
     }
-    public static function metadata($name, $description, $mode, $data): array
+    public static function metadata($name, $description, $mode, $data, ?array $limits = null): array
     {
+        $limits = $limits ?? GroupLimits::values();
         if (!is_string($name) || !is_string($description) || !is_string($mode) || !($data instanceof stdClass) ||
-            !preg_match('/[^\s\p{Z}\x{001c}-\x{001f}]/u', $name) || strlen($name) > 120 || strlen($description) > 1024 || !in_array($mode, ['open','request','invite'], true)) self::fail('INVALID_GROUP', 400);
-        self::visit($data, 0);
+            !preg_match('/[^\s\p{Z}\x{001c}-\x{001f}]/u', $name) || strlen($name) > $limits['maxNameBytes'] || strlen($description) > $limits['maxDescriptionBytes'] || !in_array($mode, ['open','request','invite'], true)) self::fail('INVALID_GROUP', 400);
+        self::visit($data, 0, $limits['maxDataDepth']);
         $json = self::json($data);
-        if (strlen($json) > 2048) self::fail('INVALID_GROUP', 400);
+        if (strlen($json) > $limits['maxDataBytes']) self::fail('INVALID_GROUP', 400);
         return ['name' => $name, 'description' => $description, 'joinMode' => $mode, 'dataJson' => $json];
     }
-    private static function visit($value, int $depth): void
+    private static function visit($value, int $depth, int $maximum): void
     {
-        if ($depth > 16 || (is_float($value) && !is_finite($value))) self::fail('INVALID_GROUP', 400);
-        if (is_array($value) || $value instanceof stdClass) foreach ($value as $child) self::visit($child, $depth + 1);
+        if ($depth > $maximum || (is_float($value) && !is_finite($value))) self::fail('INVALID_GROUP', 400);
+        if (is_array($value) || $value instanceof stdClass) foreach ($value as $child) self::visit($child, $depth + 1, $maximum);
         elseif (!is_null($value) && !is_string($value) && !is_int($value) && !is_float($value) && !is_bool($value)) self::fail('INVALID_GROUP', 400);
     }
     public static function json($value): string

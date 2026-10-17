@@ -60,6 +60,7 @@ class Database
         self::ensureAchievementsConfig($pdo);
         self::ensureMarketOperations($pdo);
         self::ensureInboxColumns($pdo);
+        self::ensureGroupStorage($pdo);
         // Millisecond registration cutoff prevents a post-publication signup in the same second qualifying.
         self::ensureUserActivityColumns($pdo);
 
@@ -85,6 +86,19 @@ class Database
         if ($pdo->query('SELECT id FROM player_values_config WHERE id = 1')->fetch() !== false) return;
         $insert = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql' ? 'INSERT IGNORE' : 'INSERT OR IGNORE';
         $pdo->exec($insert . " INTO player_values_config(id, revision, definitions, known_keys) VALUES (1, 0, '[]', '[]')");
+    }
+
+    /** Additive schema only; existing source payloads are migrated explicitly with writes stopped. */
+    public static function ensureGroupStorage(PDO $pdo): void
+    {
+        $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        self::addColumnIfNotExists($pdo,$driver,'group_pending_references','target_kind','INTEGER NULL','TINYINT NULL');
+        self::createIndexIfNotExists($pdo,$driver,'idx_group_pending_target','group_pending_references','user_id,target_kind,group_id',false,true);
+        if ($pdo->query('SELECT id FROM group_storage WHERE id=1')->fetch() === false) {
+            $ready = $pdo->query('SELECT id FROM groups_state LIMIT 1')->fetch() === false ? 1 : 0;
+            $insert=$driver==='mysql'?'INSERT IGNORE':'INSERT OR IGNORE';
+            $pdo->prepare($insert.' INTO group_storage(id,revision,cursor_group,ready) VALUES(1,0,NULL,?)')->execute([$ready]);
+        }
     }
 
     /** Read-only bootstrap when the singleton catalog already exists. */
