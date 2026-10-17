@@ -16,14 +16,14 @@ class GroupController
         $user = GroupRules::uuid($query ? $request->query('userId') : $request->body('userId'),'INVALID_GROUP');
         Auth::requirePlayerSession($request,$user); return $user;
     }
-    private static function limit(Request $request): int
+    private static function limit(Request $request,int $default): int
     {
-        $value = $request->query('limit','50'); if (!preg_match('/^[0-9]+$/D',$value)) GroupRules::fail('INVALID_PAGE',400);
+        $value = $request->query('limit',(string)$default); if (!preg_match('/^[0-9]+$/D',$value)) GroupRules::fail('INVALID_PAGE',400);
         return GroupRules::page((int)$value);
     }
     public static function get(Request $request): void { self::action(static function ($service) use ($request) { return $service->get(self::user($request,true)); }); }
     public static function detail(Request $request): void { self::action(static function ($service) use ($request) { return $service->detail(self::user($request,true),GroupRules::uuid($request->param('groupId'))); }); }
-    public static function members(Request $request): void { self::action(static function ($service) use ($request) { return $service->members(self::user($request,true),GroupRules::uuid($request->param('groupId')),$request->query('afterUserId'),self::limit($request)); }); }
+    public static function members(Request $request): void { self::action(static function ($service) use ($request) { return $service->members(self::user($request,true),GroupRules::uuid($request->param('groupId')),$request->query('afterUserId'),self::limit($request,$service->limits()['memberPageSize'])); }); }
     public static function pending(Request $request): void { self::action(static function ($service) use ($request) { return $service->pending(self::user($request,true),GroupRules::uuid($request->param('groupId'))); }); }
     public static function create(Request $request): void
     {

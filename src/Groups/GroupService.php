@@ -16,11 +16,11 @@ class GroupService implements GroupMembershipPolicy
     private InboxService $inbox;
     private PublicPlayerDisplayService $profiles;
     private $clock;
-    private int $maxMembers;
-    private int $maxGroups;
-    public function __construct(PDO $pdo, ?callable $clock = null, ?SqlTransaction $transactions = null, int $maxMembers = 500, int $maxGroups = 5)
+    private ?int $maxMembers;
+    private ?int $maxGroups;
+    public function __construct(PDO $pdo, ?callable $clock = null, ?SqlTransaction $transactions = null, ?int $maxMembers = null, ?int $maxGroups = null)
     {
-        if ($maxMembers < 1 || $maxMembers > 500 || $maxGroups < 1 || $maxGroups > 5) throw new InvalidArgumentException('Invalid group bound');
+        GroupLimits::values($maxMembers,$maxGroups);
         $this->pdo = $pdo; $this->clock = $clock ?? static function () { return Database::nowMillis(); };
         $this->transactions = $transactions ?? new SqlTransaction($pdo);
         if (!$this->transactions->owns($pdo)) throw new InvalidArgumentException('Foreign transaction connection');
@@ -41,7 +41,7 @@ class GroupService implements GroupMembershipPolicy
     }
     private function active(string $user, bool $lock = false): void { if (!$this->store->players([$user], $lock)) GroupRules::fail('PLAYER_NOT_FOUND', 404); }
     private function group(string $id, bool $lock = false): array { $group = $this->store->group($id, $lock); if ($group === null) GroupRules::missing(); return $group; }
-    public function limits(): array { return ['maxMembers' => $this->maxMembers, 'maxGroupsPerPlayer' => $this->maxGroups, 'maxInvitations' => 20, 'maxJoinRequests' => 20, 'maxDataBytes' => 2048, 'memberPageSize' => 50]; }
+    public function limits(): array { return GroupLimits::values($this->maxMembers,$this->maxGroups); }
     public function role(string $group, string $user): ?string { $member = $this->store->member(GroupRules::uuid($group), GroupRules::uuid($user)); return $member['role'] ?? null; }
     private function view(array $group, ?string $role = null, bool $admin = false): array
     {
@@ -53,8 +53,13 @@ class GroupService implements GroupMembershipPolicy
     private function mine(string $user, array $state): array
     {
         $ids = $state['groupIds']; foreach (array_merge($state['incomingInvites'], $state['outgoingRequests']) as $entry) $ids[] = $entry['groupId'];
-        $records = $this->store->groups($ids); $roles = $this->store->memberships($user); $groups = [];
-        foreach ($state['groupIds'] as $id) if (isset($records[$id], $roles[$id])) $groups[] = $this->view($records[$id], $roles[$id]);
+        $known=$state['_pendingGroups']??[];
+        $records = $known + $this->store->groups(array_values(array_diff($ids,array_keys($known))));
+        $roles = $state['_roles']??$this->store->memberships($user); $groups = [];
+        foreach ($state['groupIds'] as $id) {
+            if(!isset($records[$id],$roles[$id]))GroupStorage::required();
+            $groups[] = $this->view($records[$id],$roles[$id]);
+        }
         $result = ['userId' => $user, 'revision' => $state['revision'], 'groups' => $groups];
         foreach (['incomingInvites','outgoingRequests'] as $field) {
             $result[$field] = []; foreach ($state[$field] as $entry) $result[$field][] = $entry + ['group' => isset($records[$entry['groupId']]) ? $this->view($records[$entry['groupId']]) : null];
@@ -73,10 +78,11 @@ class GroupService implements GroupMembershipPolicy
     }
     public function members(?string $user, string $id, ?string $after, $limit): array
     {
-        $id = GroupRules::uuid($id); $limit = GroupRules::page($limit); if ($after !== null) $after = GroupRules::uuid($after, 'INVALID_PAGE'); if ($user !== null) $user = GroupRules::uuid($user);
+        $id = GroupRules::uuid($id); $limit = GroupRules::page($limit,$this->limits()['memberPageSize']); if ($after !== null) $after = GroupRules::uuid($after, 'INVALID_PAGE'); if ($user !== null) $user = GroupRules::uuid($user);
         return $this->transaction(function () use ($user,$id,$after,$limit) {
             $group = $this->group($id); if ($user !== null) { $this->active($user); if ($this->role($id,$user) === null) GroupRules::denied(); }
-            $rows = $this->store->members($id,$after,$limit); $page = array_slice($rows,0,$limit); $profiles = $this->profiles->load(array_column($page,'user_id'));
+            $rows = $this->store->members($id,$after,$limit); $page = array_slice($rows,0,$limit); $profiles = [];
+            foreach(array_chunk(array_column($page,'user_id'),200)as $batch)$profiles += $this->profiles->load($batch);
             $members = []; foreach ($page as $row) $members[] = ['userId' => $row['user_id'], 'role' => $row['role'], 'joinedAt' => InboxRules::instant((int)$row['joined_millis']), 'display' => $profiles[$row['user_id']]['display'] ?? PublicPlayerDisplayService::emptyDisplay()];
             return ['groupId' => $id, 'revision' => $group['revision'], 'members' => $members, 'nextAfterUserId' => count($rows) > $limit ? $page[count($page)-1]['user_id'] : null, 'serverTime' => InboxRules::instant(($this->clock)())];
         });
@@ -92,10 +98,11 @@ class GroupService implements GroupMembershipPolicy
     public function inspect(string $id): array { return $this->view($this->group(GroupRules::uuid($id)), null, true); }
     public function create(string $user, $expected, $name, $description, $mode, $data): array
     {
-        $user = GroupRules::uuid($user); $expected = GroupRules::revision($expected); $metadata = GroupRules::metadata($name,$description,$mode,$data);
+        $user = GroupRules::uuid($user); $expected = GroupRules::revision($expected); $metadata = GroupRules::metadata($name,$description,$mode,$data,$this->limits());
         return $this->transaction(function () use ($user,$expected,$metadata) {
+            $this->store->writable();
             $this->active($user,true); $before = $this->store->player($user,true);
-            if ($before['revision'] !== $expected) GroupRules::conflict(); if (count($before['groupIds']) >= $this->maxGroups) GroupRules::fail('PLAYER_GROUP_LIMIT');
+            if ($before['revision'] !== $expected) GroupRules::conflict(); if (count($before['groupIds']) >= $this->limits()['maxGroupsPerPlayer']) GroupRules::fail('PLAYER_GROUP_LIMIT');
             $now = ($this->clock)(); $id = Database::uuid(); $group = ['id' => $id, 'revision' => 1, 'leaderId' => $user, 'memberCount' => 1, 'createdAt' => InboxRules::instant($now), 'updatedAt' => InboxRules::instant($now), 'invitations' => [], 'joinRequests' => []] + $metadata;
             $this->store->insertGroup($group); $this->store->addMember($id,$user,'leader',$now);
             $after = $before; $after['groupIds'][] = $id; $after = $this->store->savePlayer($user,$before,$after,true);
@@ -104,8 +111,9 @@ class GroupService implements GroupMembershipPolicy
     }
     public function update(string $user, string $id, $expected, $name, $description, $mode, $data): array
     {
-        $user = GroupRules::uuid($user); $id = GroupRules::uuid($id); $expected = GroupRules::revision($expected); $metadata = GroupRules::metadata($name,$description,$mode,$data);
+        $user = GroupRules::uuid($user); $id = GroupRules::uuid($id); $expected = GroupRules::revision($expected); $metadata = GroupRules::metadata($name,$description,$mode,$data,$this->limits());
         return $this->transaction(function () use ($user,$id,$expected,$metadata) {
+            $this->store->writable();
             $old = $this->group($id,true); if ($old['revision'] !== $expected) GroupRules::conflict(); $this->active($user,true);
             $member = $this->store->member($id,$user); GroupRules::officer($member); $next = array_merge($old,$metadata);
             if ($next !== $old) $next = $this->store->saveGroup($old,$next,InboxRules::instant(($this->clock)()));
@@ -134,15 +142,16 @@ class GroupService implements GroupMembershipPolicy
     }
     private function add(array &$command, string $user, string $deciding): void
     {
-        if ($command['next']['memberCount'] >= $this->maxMembers) GroupRules::fail('GROUP_MEMBER_LIMIT');
-        $player = $this->loadPlayer($command,$user); if (count($player['groupIds']) >= $this->maxGroups) GroupRules::fail('PLAYER_GROUP_LIMIT');
+        if ($command['next']['memberCount'] >= $this->limits()['maxMembers']) GroupRules::fail('GROUP_MEMBER_LIMIT');
+        $player = $this->loadPlayer($command,$user); if (count($player['groupIds']) >= $this->limits()['maxGroupsPerPlayer']) GroupRules::fail('PLAYER_GROUP_LIMIT');
         $leader = $command['next']['leaderId']; $this->fence($command,[$user,$deciding,$leader]); $this->checkBlocks($user,[$deciding,$leader]);
         $this->clearPending($command,$user); $player = $this->loadPlayer($command,$user); $player['groupIds'][] = $command['old']['id']; $command['after'][$user] = $player;
         $this->store->addMember($command['old']['id'],$user,'member',($this->clock)()); $command['next']['memberCount']++; $command['dirty'] = true;
     }
     private function remove(array &$command, array $member): void
     {
-        $this->store->removeMember($member); $user = $member['user_id']; $player = $this->loadPlayer($command,$user); $id = $command['old']['id'];
+        $user = $member['user_id']; $player = $this->loadPlayer($command,$user); $id = $command['old']['id'];
+        $this->store->removeMember($member);
         $player['groupIds'] = array_values(array_filter($player['groupIds'],static function ($group) use ($id) { return $group !== $id; })); $command['after'][$user] = $player;
         $command['next']['memberCount']--; $command['dirty'] = true;
     }
@@ -156,6 +165,7 @@ class GroupService implements GroupMembershipPolicy
     {
         $user = GroupRules::uuid($user); $id = GroupRules::uuid($id); $input = GroupRules::action($action,$user,$expected,$target,$request,$role);
         return $this->transaction(function () use ($action,$user,$id,$input) {
+            $this->store->writable();
             $old = $this->group($id,true); if ($old['revision'] !== $input['expectedRevision']) GroupRules::conflict();
             $target = $input['targetUserId']; $participants = [$user,$target,$old['leaderId']];
             foreach (array_merge($old['invitations'],$old['joinRequests']) as $entry) if ($entry['userId'] === $target && $entry['requestId'] === $input['requestId']) $participants[] = $entry['issuerId'];
@@ -179,11 +189,11 @@ class GroupService implements GroupMembershipPolicy
                 if ($this->store->member($id,$target) !== null) GroupRules::fail('GROUP_PENDING_EXISTS');
                 foreach (array_merge($command['next']['invitations'],$command['next']['joinRequests']) as $entry) if ($entry['userId'] === $target) GroupRules::fail('GROUP_PENDING_EXISTS');
                 $field = $invites ? 'invitations' : 'joinRequests'; $playerField = $invites ? 'incomingInvites' : 'outgoingRequests';
-                if (count($command['next'][$field]) >= 20) GroupRules::fail('GROUP_PENDING_LIMIT');
-                $player = $this->loadPlayer($command,$target); if (count($player[$playerField]) >= 20) GroupRules::fail('PLAYER_PENDING_LIMIT');
+                if (count($command['next'][$field]) >= $this->limits()[$invites ? 'maxInvitations' : 'maxJoinRequests']) GroupRules::fail('GROUP_PENDING_LIMIT');
+                $player = $this->loadPlayer($command,$target); if (count($player[$playerField]) >= $this->limits()[$invites ? 'maxPlayerInvitations' : 'maxPlayerRequests']) GroupRules::fail('PLAYER_PENDING_LIMIT');
                 $this->fence($command,[$actor,$target,$command['next']['leaderId']]); $this->checkBlocks($target,[$actor,$command['next']['leaderId']]);
-                $entry = ['userId' => $target,'requestId' => Database::uuid(),'issuerId' => $actor,'createdAt' => InboxRules::instant(($this->clock)())];
-                $command['next'][$field][] = $entry; $player[$playerField][] = ['groupId' => $id,'requestId' => $entry['requestId'],'issuerId' => $actor,'createdAt' => $entry['createdAt']]; $command['after'][$target] = $player;
+                $entry = ['userId' => $target,'requestId' => Database::uuid(),'issuerId' => $actor];
+                $command['next'][$field][] = $entry; $player[$playerField][] = ['groupId' => $id,'requestId' => $entry['requestId'],'issuerId' => $actor]; $command['after'][$target] = $player;
                 $command['notices'][] = [$invites ? $target : $command['next']['leaderId'],$action,$entry['requestId']]; $command['dirty'] = true; return;
             case 'accept-invite': case 'decline-invite': case 'cancel-invite': case 'accept-request': case 'decline-request': case 'cancel-request':
                 $invites = substr($action,-6) === 'invite'; if (in_array($action,['cancel-invite','accept-request','decline-request'],true)) GroupRules::officer($member);
@@ -223,6 +233,7 @@ class GroupService implements GroupMembershipPolicy
     /** At most ten indexed group references per invocation; keep the nullable FK retry anchor. */
     public function cleanupDeletedPlayer(string $user): array
     {
+        $this->store->writable();
         $user = GroupRules::uuid($user); if ($this->store->players([$user])) GroupRules::fail('REVISION_CONFLICT');
         $state = $this->store->player($user); $ids = array_values(array_unique(array_merge($state['groupIds'],$this->store->referencing($user,11)))); sort($ids,SORT_STRING);
         $updated = 0;
@@ -259,6 +270,7 @@ class GroupService implements GroupMembershipPolicy
     }
     public function cleanupDeleted(?string $after = null): array
     {
+        $this->store->writable();
         if ($after !== null) $after = GroupRules::uuid($after,'INVALID_PAGE');
         $ids = $this->store->deletedPlayers($after); $results = [];
         foreach (array_slice($ids,0,10) as $user) {
