@@ -58,15 +58,18 @@ class PlayerValuesService
 
     public function config(bool $offers = true, bool $current = false): array
     {
-        $row = $this->pdo->query('SELECT revision, definitions, known_keys FROM player_values_config WHERE id = 1' .
-            ($current && $this->mysql ? ' FOR UPDATE' : ''))->fetch();
+        // A locking player/state read must use the same current catalogue, even when
+        // the caller's outer MySQL scope already established an older RR snapshot.
+        // Read providers share the current catalogue lock; explicit configuration owns it exclusively.
+        $lock = $this->mysql && ($current || $this->pdo->inTransaction()) ? ($current ? ' FOR UPDATE' : ' LOCK IN SHARE MODE') : '';
+        $row = $this->pdo->query('SELECT revision, definitions, known_keys FROM player_values_config WHERE id = 1' . $lock)->fetch();
         if ($row === false) throw new RuntimeException('Player-values schema is not initialized');
         $config = ['revision' => (int)$row['revision'], 'definitions' => json_decode($row['definitions'], true, 512, JSON_THROW_ON_ERROR),
             'knownKeys' => json_decode($row['known_keys'], true, 512, JSON_THROW_ON_ERROR)];
         $this->storageKeys = $config['knownKeys'];
         if ($offers) {
             $config['offers'] = array_map(static function ($row) { $offer = json_decode($row['data'], true, 512, JSON_THROW_ON_ERROR); $offer['itemRewards'] = $offer['itemRewards'] ?? []; $offer['purchasesPerDay'] = null; return $offer; },
-                $this->pdo->query('SELECT data FROM player_value_offers ORDER BY offer_key')->fetchAll());
+                $this->pdo->query('SELECT data FROM player_value_offers ORDER BY offer_key' . $lock)->fetchAll());
             $config['limits'] = $this->limits;
         }
         return $config;
@@ -168,7 +171,7 @@ class PlayerValuesService
         return $this->mutate($userId, $operationId, PlayerValuesLedger::issuedAt($operationId),
             PlayerValuesLedger::hash('purchase', $userId, $offerKey), 'offer:' . $offerKey, null,
             function ($state, $definitions) use ($offerKey, $userId, $operationId) {
-                $query = $this->pdo->prepare('SELECT data FROM player_value_offers WHERE offer_key = ?'); $query->execute([$offerKey]);
+                $query = $this->pdo->prepare('SELECT data FROM player_value_offers WHERE offer_key = ?' . ($this->mysql ? ' LOCK IN SHARE MODE' : '')); $query->execute([$offerKey]);
                 $row = $query->fetch(); $offer = $row === false ? null : json_decode($row['data'], true, 512, JSON_THROW_ON_ERROR);
                 [$next, $applied] = PlayerValuesLedger::purchase($state, $definitions, $offer);
                 $items = [];

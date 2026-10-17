@@ -71,6 +71,12 @@ CREATE TABLE IF NOT EXISTS gift_codes (
     values_json TEXT,
     max_redemptions INTEGER NOT NULL DEFAULT 1,
     current_redemptions INTEGER NOT NULL DEFAULT 0,
+    v2_id BLOB,
+    protocol_version INTEGER NOT NULL DEFAULT 2,
+    config_revision INTEGER NOT NULL DEFAULT 1,
+    max_per_user INTEGER DEFAULT 1,
+    unlimited_total INTEGER NOT NULL DEFAULT 0,
+    migration_hash TEXT,
     expires_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -88,6 +94,17 @@ CREATE TABLE IF NOT EXISTS gift_code_redemptions (
     FOREIGN KEY (user_id) REFERENCES users(id),
     UNIQUE(gift_code_id, user_id)
 );
+
+-- One constant row serializes explicit campaign identity creation/migration, never player state.
+CREATE TABLE IF NOT EXISTS gift_code_identity_lock (id INTEGER PRIMARY KEY CHECK(id=1));
+
+-- Permanent compact source guard; intentionally survives campaign/user row deletion.
+CREATE TABLE IF NOT EXISTS gift_code_counts (
+    campaign_id BLOB NOT NULL CHECK(typeof(campaign_id)='blob' AND length(campaign_id)=16),
+    player_id BLOB NOT NULL CHECK(typeof(player_id)='blob' AND length(player_id)=16),
+    count INTEGER NOT NULL CHECK(typeof(count)='integer' AND count>=0),
+    PRIMARY KEY(campaign_id,player_id)
+) WITHOUT ROWID;
 
 -- Player profile cosmetics catalog (one per installation), filled by SQL.
 -- cosmetic_id: 1 to 32 characters a-z 0-9 . _ - (starts with a letter or digit)

@@ -231,25 +231,138 @@ Language values are normalized like the managed backend: for example `DE-de` bec
 
 | Method | Endpoint | Description |
 |---|---|---|
-| POST | `/gift-codes/validate` | Check if a gift code is valid |
-| POST | `/gift-codes/redeem` | Redeem a gift code (needs the player session, see below) |
+| POST | `/gift-codes/validate` | Read-only validity; authenticated `includeIntent:true` prepares V2 |
+| POST | `/gift-codes/redeem` | Consume the original V2 campaign/count/revision tuple atomically |
 
-`/gift-codes/redeem` is bound to the player's session: send `Authorization: Bearer <accessToken>` from sign-in. An invalid or expired session returns `401` (`SESSION_REQUIRED`), a session of another user `403` (`SESSION_FORBIDDEN`). A request without a session is rejected with `401` (`SESSION_REQUIRED`) as well; there is no transition window, so SDK versions that do not send the session (Unity 1.8.6, Godot 1.7.3 and MCP 1.5.5) cannot redeem.
+Public validation accepts `{code,userId}` and returns `{valid}`. Preparing adds
+`includeIntent:true` and the player's `Authorization: Bearer <accessToken>`.
+Preparation neither reserves nor writes anything. A valid result contains
+`protocolVersion:2`, immutable `campaignId`, `expectedCount`, and `configRevision`.
+Both counts/revisions are canonical nonnegative decimal strings in signed Int64
+range (`0`..`9223372036854775807`), including on PHP 7.4. A 64-bit PHP runtime is
+required. Numbers, leading zeroes, signs, whitespace and exponent notation fail.
 
-Gift codes can additionally grant up to eight positive, unique Player Values rewards. The local operator sets them using the same configured keys and balance limits:
+Persist the complete local intent **before** sending: protocol version, project
+scope, user ID, entered code, campaign UUID, expected count and config revision.
+Project scope binds the normalized server/project; keep the session separately.
+Send the six remaining fields and the same player's Bearer token:
 
-```sh
-php bin/gift-codes.php values CODE
-php bin/gift-codes.php set-values CODE <<'JSON'
-{"values":[{"key":"gold","amount":5}]}
-JSON
+```json
+{"protocolVersion":2,"code":"WELCOME","userId":"PLAYER-UUID","campaignId":"CAMPAIGN-UUID","expectedCount":"0","configRevision":"1"}
 ```
 
-Omitting `values` preserves the current rewards; `[]` clears them and `null` is rejected. Amounts must be JSON integers from1 to9007199254740991 and fit the configured `maxBalance`. The operator command updates only `values_json`, preserving concurrent redemption counters. The script rejects HTTP before configuration or database bootstrap. Existing SQL-created codes with `values_json IS NULL` retain their opaque `reward_data` and cosmetic-grant behavior and perform no Player Values reads.
+After a timeout or `STATE_CONFLICT`, retry this exact original tuple. Never prepare
+a replacement automatically. Two devices preparing the same count consume one
+sequence slot. A fresh success has `count == expectedCount + 1`, the original
+revision, and `alreadyApplied:false`/`replayed:false`. Counters, Player Values and
+cosmetic grants share the explicit owning SQL transaction. No new redemption row
+or secondary Player Values receipt is written. Current configuration and limits
+apply to each fresh attempt; the campaign UUID prevents a reused visible code
+from redirecting an old intent.
 
-Add a stable `idempotencyId` of1..128 characters to the normal `{userId,code}` redemption body and retain it across a timeout. Older clients may omit it. A successful response additionally contains `grantedValues`, the current `playerValues` snapshot (or null for legacy codes), and `replayed`. A retained replay uses the original granted amounts and gift data, together with the current balance. Reusing an ID for a different code/player returns409 `OPERATION_CONFLICT`; an uncertain commit returns409 `STATE_CONFLICT` and requires retrying the same ID. The counter, permanent source receipt, values and cosmetic unlocks share one explicit SQL transaction; any later failure rolls them all back.
+When the permanent pair count exceeds the original expected count, replay returns
+the **current** count/revision and authoritative current Player Values with both
+flags true, `giftData:null`, `grantedValues:[]` and `grantedUnlocks:[]`. It does not
+reconstruct a historical response or award anything, even after expiry or a limit
+reduction. A count ahead returns409 `COUNT_AHEAD`; a fresh stale revision returns409
+`CAMPAIGN_CHANGED`; physical overflow returns409 `COUNTER_EXHAUSTED`. V1 requests and
+V1 replays return409 `UPGRADE_REQUIRED`; mixed V1/V2 fields return400
+`INVALID_REQUEST`. Protected legacy campaigns return409 `MIGRATION_REQUIRED` on
+prepare/redeem (public validity is false). Missing/expired and foreign sessions
+remain401 `SESSION_REQUIRED` and403 `SESSION_FORBIDDEN`; include-intent also requires
+a session. Missing campaigns return404 `INVALID_GIFT_CODE` on V2 redeem.
 
-Value-bearing redemption receipts are permanent guards: never delete rows where `value_granted_at IS NOT NULL`, even after the bounded Player Values receipt has been evicted. If operating a90-day cleanup for ordinary history, its predicate must include `value_granted_at IS NULL`. Additive startup migration preserves old counters/history and provisions the unique case-sensitive idempotency index and guard-retention index. The existing one-redemption-per-code/player self-hosted rule remains unchanged. Run `php tests/gift-code-values.php` for real SQLite migration, rollback, replay and concurrent-process checks; the same suite supports an explicitly named temporary MySQL test database through its guarded `HORIZON_GIFT_TEST_DSN` fixture variables.
+Operator commands reject HTTP before configuration/database access:
+
+```sh
+php bin/gift-codes.php create WELCOME <<'JSON'
+{"giftData":"opaque game data","values":[{"key":"gold","amount":5}],"maxTotalRedemptions":1000,"maxRedemptionsPerUser":1}
+JSON
+php bin/gift-codes.php values WELCOME
+php bin/gift-codes.php configure WELCOME 1 <<'JSON'
+{"expiresAt":"2027-01-01T00:00:00Z","maxRedemptionsPerUser":null}
+JSON
+php bin/gift-codes.php set-values WELCOME <<'JSON'
+{"values":[]}
+JSON
+php bin/gift-codes.php statistics
+```
+
+The existing reward shape allows at most eight unique configured Player Values,
+each a positive JSON integer up to9007199254740991 and its configured `maxBalance`.
+Omitted fields preserve configuration; `values:[]` clears rewards; `values:null`
+fails. `giftData` remains opaque, with optional existing cosmetic `grants`.
+Limits are positive Int32 integers or `null` for unlimited; defaults remain one
+global redemption and one per player. `GIFT_CODES_CONFIG_BYTES` controls CLI input
+size (default16384). Configuration changes advance the exact revision and preserve
+all counters. Frozen migrations reject configuration changes.
+
+Admin compatibility number fields may round in JavaScript. Use
+`exactCurrentTotalRedemptions` and `exactRemainingRedemptions`: canonical strings,
+with `"0"` for exhausted finite campaigns and **only null** for unlimited, never-1.
+`statistics` returns `exactTotalRedemptions`, a decimal string whose sum may exceed
+Int64. No floating-point conversion is used for these exact fields.
+
+#### Explicit legacy migration
+
+The additive schema upgrade preserves old IDs/FKs, all source receipts, balances
+and counters. Old campaigns start protected V1; only explicit creation starts V2.
+There is no startup/login migration or V1-history fallback. Before the operator
+runs any migration: stop and verify all old writers, create a verified backup,
+restore it into a separate installation, compare the restored state, and prove
+that the original global counter was monotone for the captured source commit.
+A checksum alone proves neither restoration nor monotonicity. Upgrade the schema
+separately under maintenance; `inspect-plan` intentionally does not bootstrap it.
+
+Supply nonempty absolute backup/restore artifacts with SHA256 and a provenance
+JSON artifact containing `sourceCampaignId` (original ID), `usedCount` (exact
+string), `sourceCommit` (40 lowercase hex), `monotoneHistoryVerified:true`, and
+`writersStopped:true`. These statements must be backed by the operational checks.
+
+```sh
+php bin/gift-codes.php inspect-plan LEGACY /absolute/new-plan.json \
+  --backup=/absolute/backup --backup-sha256=SHA256 \
+  --restore-proof=/absolute/restore-proof --restore-proof-sha256=SHA256 \
+  --provenance=/absolute/provenance.json --provenance-sha256=SHA256
+php bin/gift-codes.php apply-plan /absolute/new-plan.json PLAN_SHA256 - 50
+# Repeat using the returned `after` cursor until activated:true.
+php bin/gift-codes.php cleanup-plan /absolute/new-plan.json PLAN_SHA256 50
+# Repeat until more:false, then verify balances/counts and retain the checked backup.
+```
+
+Inspection deduplicates original redemption IDs with retained, owned Player Values
+source guards and verifies the union equals the independently proven global use.
+Missing ordinary source identities, changed hashes/times, foreign/missing players,
+and counter gaps remain protected. **Never guess missing ordinary redemptions.**
+Recover from the checked backup or reconcile the source explicitly before retrying.
+Noncanonical mixed/uppercase original UUIDs also remain protected for explicit
+recovery. Canonical UUIDs need no second identity. Only non-UUID legacy IDs receive
+a one-time sealed16-byte `v2_id`; original IDs and FKs remain intact. Official
+identity writers serialize collision checks for raw UUIDs and aliases, with no
+retargeting. Canonical runtime lookup uses the original PK/unique alias index.
+
+Apply rechecks the sealed inventory/configuration, freezes the campaign, installs
+positive counters idempotently in bounded pages, and activates only after an exact
+pair-set/aggregate check. Interrupted runs resume the same plan. It never grants
+old rewards. Cleanup requires activated proof and permanent counts, then transfers
+only corresponding old Player Values guards and deletes corresponding source rows
+in the same transaction; all balances, initialization and other origins remain.
+The permanent rejection floor advances. Cleanup ends the parallel history; never
+run a general TTL or delete old valued rows before this verified handover.
+Inspection reads100 rows/query but its identity/count map uses memory proportional
+to the source inventory; the sealed plan stores counts/digests, no copied rewards.
+CLI failures exit2 (invalid/domain),3 (infrastructure), or4 (protected/conflict).
+
+A counter's fixed MySQL fields are16-byte campaign UUID +16-byte player UUID +8-byte
+signed count =40 raw field bytes, with a clustered composite PK and no history.
+SQL records/pages, transaction metadata and indexes add overhead; SQLite uses
+variable-width integers and `WITHOUT ROWID`. The optional legacy alias, unique
+alias index, campaign metadata and one installation-wide identity mutex are
+separate costs. `tests/gift-code-storage.php` measures actual production tables;
+no universal compression percentage or BSON90-byte estimate is claimed for SQL.
+Run `bash tests/test.sh` for HTTP/source checks; `tests/gift-codes-v2.php` and
+`tests/gift-code-migration.php` also accept guarded disposable MySQL fixtures via
+`HORIZON_GIFT_TEST_DSN`, `HORIZON_GIFT_TEST_USER`, `HORIZON_GIFT_TEST_PASSWORD`.
 
 ### User Feedback
 
@@ -309,13 +422,16 @@ Deleting a row removes it from the catalog; players who show it keep the ID unti
 
 Put the IDs into a `grants` array of the gift code's `reward_data` (1 to 10 IDs). Other keys stay your game's reward.
 
-```sql
-INSERT INTO gift_codes (id, code, reward_type, reward_data, max_redemptions, current_redemptions, created_at)
-VALUES ('6f1c0e9e-0000-4000-8000-000000000001', 'SUPPORTER', 'cosmetic',
-        '{"gold": 500, "grants": ["badge.supporter"]}', 1000, 0, '2026-09-29T00:00:00');
+```sh
+php bin/gift-codes.php create SUPPORTER <<'JSON'
+{"giftData":"{\"gold\":500,\"grants\":[\"badge.supporter\"]}","maxTotalRedemptions":1000}
+JSON
 ```
 
-Redeeming with a Bearer session merges the grants that exist in `cosmetics` into `users.unlocks` and returns them as `grantedUnlocks` (`[]` for every other redeem response). A code with grants redeemed without session returns `401 SESSION_REQUIRED` and is not used up. A result above 25 unlocks returns `409 UNLOCK_LIMIT_REACHED`; nothing is redeemed.
+Prepare and redeem through the V2 tuple described above. A fresh success merges
+existing cosmetics into `users.unlocks` and returns `grantedUnlocks`. Replay returns
+an empty list and the current profile stays authoritative. A result above25 unlocks
+returns409 `UNLOCK_LIMIT_REACHED`; the entire redemption rolls back.
 
 ### 3. Unlock for a Single Player (Support Cases)
 

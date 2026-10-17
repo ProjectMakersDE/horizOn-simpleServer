@@ -140,18 +140,30 @@ class Database
     {
         $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
         $definitions = [
-            'gift_codes' => ['values_json' => 'TEXT'],
+            'gift_codes' => ['values_json' => 'TEXT', 'v2_id' => $driver === 'mysql' ? 'BINARY(16) NULL' : 'BLOB',
+                // Existing campaigns are protected V1; only explicit creation starts V2.
+                'protocol_version' => $driver === 'mysql' ? 'TINYINT NOT NULL DEFAULT 1' : 'INTEGER NOT NULL DEFAULT 1',
+                'config_revision' => $driver === 'mysql' ? 'BIGINT NOT NULL DEFAULT 1' : 'INTEGER NOT NULL DEFAULT 1',
+                'max_per_user' => $driver === 'mysql' ? 'INT DEFAULT 1' : 'INTEGER DEFAULT 1',
+                'unlimited_total' => $driver === 'mysql' ? 'TINYINT NOT NULL DEFAULT 0' : 'INTEGER NOT NULL DEFAULT 0',
+                'migration_hash' => $driver === 'mysql' ? 'CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL' : 'TEXT'],
             'gift_code_redemptions' => ['idempotency_id' => $driver === 'mysql'
                 ? 'VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL' : 'TEXT',
                 'gift_data' => 'TEXT', 'granted_values' => 'TEXT', 'value_granted_at' => $driver === 'mysql' ? 'BIGINT NULL' : 'INTEGER'],
         ];
         foreach ($definitions as $table => $columns) {
             if ($driver === 'mysql') {
-                $query = $pdo->prepare('SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?');
-                $query->execute([$table]); $existing = $query->fetchAll(PDO::FETCH_COLUMN);
+                $query = $pdo->prepare('SELECT COLUMN_NAME,DATA_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?');
+                $query->execute([$table]); $metadata = $query->fetchAll(PDO::FETCH_ASSOC); $existing = array_column($metadata, 'COLUMN_NAME');
+                if ($table === 'gift_codes') foreach ($metadata as $column) if ($column['COLUMN_NAME'] === 'current_redemptions' && $column['DATA_TYPE'] !== 'bigint')
+                    $pdo->exec('ALTER TABLE gift_codes MODIFY current_redemptions BIGINT NOT NULL DEFAULT 0');
             } else $existing = array_column($pdo->query('PRAGMA table_info(' . $table . ')')->fetchAll(), 'name');
             foreach ($columns as $column => $type) if (!in_array($column, $existing, true)) $pdo->exec('ALTER TABLE ' . $table . ' ADD COLUMN ' . $column . ' ' . $type);
         }
+        self::createIndexIfNotExists($pdo, $driver, 'idx_gift_v2_identity', 'gift_codes', 'v2_id', true, true);
+        $pdo->exec('CREATE TABLE IF NOT EXISTS gift_code_identity_lock (id ' . ($driver === 'mysql' ? 'TINYINT PRIMARY KEY) ENGINE=InnoDB' : 'INTEGER PRIMARY KEY CHECK(id=1))'));
+        if ($pdo->query('SELECT id FROM gift_code_identity_lock WHERE id=1')->fetch() === false)
+            $pdo->exec(($driver === 'mysql' ? 'INSERT IGNORE' : 'INSERT OR IGNORE') . ' INTO gift_code_identity_lock(id) VALUES(1)');
         self::createIndexIfNotExists($pdo, $driver, 'idx_gift_idempotency', 'gift_code_redemptions', 'idempotency_id', true, true);
         self::createIndexIfNotExists($pdo, $driver, 'idx_gift_retention', 'gift_code_redemptions', 'value_granted_at, redeemed_at', false, true);
     }

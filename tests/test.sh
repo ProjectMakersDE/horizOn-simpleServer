@@ -514,8 +514,7 @@ REDEEM_RESP=$(curl -s "$BASE_URL/gift-codes/redeem" \
     -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
     -H "Authorization: Bearer $SESSION_TOKEN" \
     -d "{\"code\":\"NONEXISTENT\",\"userId\":\"$USER_ID\"}")
-assert_contains "POST /gift-codes/redeem not found returns success false" '"success":false' "$REDEEM_RESP"
-assert_contains "POST /gift-codes/redeem returns not found message" 'not found' "$REDEEM_RESP"
+assert_contains "V1 gift requests require explicit client upgrade" '"code":"UPGRADE_REQUIRED"' "$REDEEM_RESP"
 
 # Redeem without session -> 401 SESSION_REQUIRED, no transition window, no Deprecation/Sunset
 NOSESSION_RESP=$(curl -s -D - -w "\n%{http_code}" "$BASE_URL/gift-codes/redeem" \
@@ -541,7 +540,7 @@ SESSION_TOKEN_2=$(echo "$SIGNIN2_BODY" | php -r 'echo json_decode(file_get_conte
 # Seed a redeemable gift code directly in the test database
 php -r '$pdo = new PDO("sqlite:./data/test_horizon_integration.db");
 $stmt = $pdo->prepare("INSERT INTO gift_codes (id, code, reward_type, reward_data, max_redemptions, current_redemptions, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)");
-$stmt->execute(["gift-886", "SESSION886", "currency", "{\"gold\":5}", 10, 0, gmdate("Y-m-d\\TH:i:s")]);'
+$stmt->execute(["6f1c0e9e-0000-4000-8000-000000000886", "SESSION886", "currency", "{\"gold\":5}", 10, 0, gmdate("Y-m-d\\TH:i:s")]);'
 
 # Invalid session -> 401
 REDEEM_BAD_SESSION_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/gift-codes/redeem" \
@@ -557,11 +556,18 @@ REDEEM_FOREIGN_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/gift-c
     -d "{\"code\":\"SESSION886\",\"userId\":\"$USER_ID\"}")
 assert_status "POST /gift-codes/redeem with another player's session" 403 "$REDEEM_FOREIGN_STATUS"
 
+# Read-only authenticated prepare. Keep this exact body across an uncertain response.
+gift_intent() {
+    local prepared
+    prepared=$(curl -fsS "$BASE_URL/gift-codes/validate" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $3" -d "{\"code\":\"$1\",\"userId\":\"$2\",\"includeIntent\":true}") || return 1
+    php -r '$p=json_decode($argv[1],true,512,JSON_THROW_ON_ERROR);if(($p["valid"]??false)!==true)exit(1);unset($p["valid"]);$p["code"]=$argv[2];$p["userId"]=$argv[3];echo json_encode($p,JSON_THROW_ON_ERROR);' "$prepared" "$1" "$2"
+}
+SESSION_GIFT_INTENT=$(gift_intent SESSION886 "$USER_ID" "$SESSION_TOKEN")
 # Own session -> redeemed
 REDEEM_OWN_RESP=$(curl -s -w "\n%{http_code}" "$BASE_URL/gift-codes/redeem" \
     -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
     -H "Authorization: Bearer $SESSION_TOKEN" \
-    -d "{\"code\":\"SESSION886\",\"userId\":\"$USER_ID\"}")
+    -d "$SESSION_GIFT_INTENT")
 REDEEM_OWN_BODY=$(echo "$REDEEM_OWN_RESP" | sed '$d')
 REDEEM_OWN_STATUS=$(echo "$REDEEM_OWN_RESP" | tail -1)
 assert_status "POST /gift-codes/redeem with own session" 200 "$REDEEM_OWN_STATUS"
@@ -700,8 +706,8 @@ assert_contains "CORS preflight allows Authorization" 'Authorization' "$PP_CORS_
 php -r '$pdo = new PDO("sqlite:./data/test_horizon_integration.db");
 $stmt = $pdo->prepare("INSERT INTO gift_codes (id, code, reward_type, reward_data, max_redemptions, current_redemptions, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)");
 $now = gmdate("Y-m-d\\TH:i:s");
-$stmt->execute(["gift-881", "GRANT881", "cosmetic", "{\"gold\":1,\"grants\":[\"frame.gold\",\"badge.supporter\",\"gone.item\"]}", 10, 0, $now]);
-$stmt->execute(["gift-881-cap", "CAP881", "cosmetic", "{\"grants\":[\"badge.supporter\"]}", 10, 0, $now]);'
+$stmt->execute(["6f1c0e9e-0000-4000-8000-000000000881", "GRANT881", "cosmetic", "{\"gold\":1,\"grants\":[\"frame.gold\",\"badge.supporter\",\"gone.item\"]}", 10, 0, $now]);
+$stmt->execute(["6f1c0e9e-0000-4000-8000-000000000882", "CAP881", "cosmetic", "{\"grants\":[\"badge.supporter\"]}", 10, 0, $now]);'
 
 # Code with grants without session -> 401, code not used up
 GRANT_NOSESSION_RESP=$(curl -s -w "\n%{http_code}" "$BASE_URL/gift-codes/redeem" \
@@ -717,20 +723,21 @@ GRANT_STILL_VALID=$(curl -s "$BASE_URL/gift-codes/validate" \
 assert_contains "code with grants is not used up without session" '"valid":true' "$GRANT_STILL_VALID"
 
 # Code with grants with session -> unlocks written, unknown grant skipped
+GRANT_INTENT=$(gift_intent GRANT881 "$USER_ID" "$SESSION_TOKEN")
 GRANT_OWN_RESP=$(curl -s -w "\n%{http_code}" "$BASE_URL/gift-codes/redeem" \
     -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" \
-    -d "{\"code\":\"GRANT881\",\"userId\":\"$USER_ID\"}")
+    -d "$GRANT_INTENT")
 GRANT_OWN_BODY=$(echo "$GRANT_OWN_RESP" | sed '$d')
 GRANT_OWN_STATUS=$(echo "$GRANT_OWN_RESP" | tail -1)
 assert_status "redeem a code with grants with own session" 200 "$GRANT_OWN_STATUS"
 assert_contains "redeem returns grantedUnlocks" '"grantedUnlocks":["frame.gold","badge.supporter"]' "$GRANT_OWN_BODY"
 assert_not_contains "grant missing from the catalog is skipped" 'gone.item"]' "$GRANT_OWN_BODY"
 
-# Redeem without grants returns an empty grantedUnlocks
+# V1 never silently maps to a fresh prepared sequence
 GRANT_NONE_BODY=$(curl -s "$BASE_URL/gift-codes/redeem" \
     -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" \
     -d "{\"code\":\"NONEXISTENT\",\"userId\":\"$USER_ID\"}")
-assert_contains "failed redeem returns empty grantedUnlocks" '"grantedUnlocks":[]' "$GRANT_NONE_BODY"
+assert_contains "V1 has a stable upgrade error" '"code":"UPGRADE_REQUIRED"' "$GRANT_NONE_BODY"
 
 # The unlocked frame is now available and can be selected
 PP_AFTER_GRANT_BODY=$(curl -s "$BASE_URL/player-profile?userId=$USER_ID" \
@@ -747,9 +754,10 @@ php -r '$pdo = new PDO("sqlite:./data/test_horizon_integration.db");
 $ids = array_map(function ($i) { return "old.item" . $i; }, range(1, 25));
 $stmt = $pdo->prepare("UPDATE users SET unlocks = ? WHERE id = ?");
 $stmt->execute([json_encode($ids), $argv[1]]);' "$USER_ID_2"
+CAP_INTENT=$(gift_intent CAP881 "$USER_ID_2" "$SESSION_TOKEN_2")
 GRANT_CAP_RESP=$(curl -s -w "\n%{http_code}" "$BASE_URL/gift-codes/redeem" \
     -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN_2" \
-    -d "{\"code\":\"CAP881\",\"userId\":\"$USER_ID_2\"}")
+    -d "$CAP_INTENT")
 GRANT_CAP_BODY=$(echo "$GRANT_CAP_RESP" | sed '$d')
 GRANT_CAP_STATUS=$(echo "$GRANT_CAP_RESP" | tail -1)
 assert_status "redeem over the unlock cap" 409 "$GRANT_CAP_STATUS"
@@ -942,22 +950,36 @@ assert_status 'public app key never exposes operator configuration' 404 "$PV_ADM
 if php tests/player-values.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 if php tests/player-values-bootstrap.php "$TEST_PORT"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
-# Gift-code value rewards use the same authenticated state and immutable original redemption ID.
+# Gift V2: an authenticated read prepares the exact immutable UUID/count/revision tuple.
 php -r 'require "src/Core/Config.php";require "src/Core/Database.php";Config::load(".env");$p=Database::connect();$p->prepare("INSERT INTO gift_codes(id,code,reward_data,max_redemptions) VALUES(?,?,?,?)")->execute([Database::uuid(),"VALUES-HTTP","opaque-gift",10]);'
 php bin/gift-codes.php set-values VALUES-HTTP <<'JSON' >/dev/null
 {"values":[{"key":"gold","amount":5}]}
 JSON
-GC_BODY="{\"userId\":\"$USER_ID\",\"code\":\"VALUES-HTTP\",\"idempotencyId\":\"http-original-gift\"}"
+GC_BODY=$(gift_intent VALUES-HTTP "$USER_ID" "$SESSION_TOKEN")
 GC_FIRST=$(curl -s "$BASE_URL/gift-codes/redeem" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$GC_BODY")
 assert_contains 'gift reward response includes actual values' '"grantedValues":[{"key":"gold","amount":5}]' "$GC_FIRST"
 assert_contains 'gift reward includes current player values' '"balance":75' "$GC_FIRST"
 assert_contains 'first gift reward not replayed' '"replayed":false' "$GC_FIRST"
 GC_REPLAY=$(curl -s "$BASE_URL/gift-codes/redeem" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$GC_BODY")
 assert_contains 'gift original ID safely replays' '"replayed":true' "$GC_REPLAY"
+assert_contains 'gift replay contains no historical values' '"grantedValues":[]' "$GC_REPLAY"
+assert_contains 'gift replay contains no historical opaque payload' '"giftData":null' "$GC_REPLAY"
+assert_contains 'gift count is an exact decimal string' '"count":"1"' "$GC_REPLAY"
 assert_contains 'gift original ID never regrants' '"balance":75' "$GC_REPLAY"
-GC_INVALID=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/gift-codes/redeem" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "{\"userId\":\"$USER_ID\",\"code\":\"VALUES-HTTP\",\"idempotencyId\":1}")
-assert_status 'gift idempotency ID rejects coercion' 400 "$GC_INVALID"
+for GC_BAD in '0' '"01"' '"9223372036854775808"'; do
+    GC_BAD_BODY=$(php -r '$d=json_decode($argv[1],true);$d["expectedCount"]=json_decode($argv[2],true);echo json_encode($d);' "$GC_BODY" "$GC_BAD")
+    GC_INVALID=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/gift-codes/redeem" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$GC_BAD_BODY")
+    assert_status 'gift exact counter rejects numeric/coerced/out-of-range values' 400 "$GC_INVALID"
+done
+GC_MIXED=$(php -r '$d=json_decode($argv[1],true);$d["idempotencyId"]="legacy";echo json_encode($d);' "$GC_BODY")
+GC_MIXED_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/gift-codes/redeem" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$GC_MIXED")
+assert_status 'mixed V1/V2 request is never translated' 400 "$GC_MIXED_STATUS"
+GC_PRIVATE=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/gift-codes/validate" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -d "{\"code\":\"VALUES-HTTP\",\"userId\":\"$USER_ID\",\"includeIntent\":true}")
+assert_status 'intent preparation requires the player session' 401 "$GC_PRIVATE"
 if php tests/gift-code-values.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/gift-code-migration.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/gift-code-cli.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/gift-code-storage.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 # The SDK preflight must distinguish an unsupported gateway from a transient transport error.
 REALTIME_RESP=$(curl -s -w "\n%{http_code}" "$BASE_URL/realtime/session" \
     -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" -d '{}')
