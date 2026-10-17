@@ -1,7 +1,7 @@
 <?php
 
 declare(strict_types=1);
-require_once __DIR__ . '/InboxRules.php';
+require_once __DIR__ . '/InboxStorage.php';
 require_once __DIR__ . '/../PlayerValues/PlayerValuesService.php';
 
 /** Cold migration only. The original source and every credit share the caller's SQL transaction. */
@@ -34,19 +34,19 @@ class InboxLegacyRewards
         if(!$this->transactions->isRunning())throw new LogicException('Legacy settlement requires the source SQL transaction');
         $q=$this->pdo->prepare('SELECT data FROM inbox_state WHERE user_id=?'.($this->mysql?' FOR UPDATE':''));$q->execute([$user]);$raw=$q->fetchColumn();
         if($raw===false)return [null,InboxRules::emptyState()];
-        $state=json_decode($raw,true,512,JSON_THROW_ON_ERROR);
-        if(!is_array($state)||isset($state['s'])||!isset($state['entries'],$state['receipts']))$this->required();
+        $state=InboxStorage::state($raw);
         return [$raw,$state];
     }
     public function requireUndelivered(string $user,string $source): void {
         [, $state]=$this->state($user);
         foreach($state['entries'] as $entry)if($entry['sourceOperationId']===$source)$this->required();
         foreach($state['receipts'] as $receipt)if($receipt['operationId']===$source)$this->required();
+        foreach($state['legacyClaims']??[]as$entry)if(($entry['sourceOperationId']??null)===$source)$this->required();
     }
     public function settle(string $user,string $entryId,string $source,int $issued,string $achievementKey): void {
         [$raw,$state]=$this->state($user);$matches=[];
-        foreach($state['entries'] as $i=>$entry)if($entry['id']===$entryId||$entry['sourceOperationId']===$source)$matches[$i]=$entry;
-        if(count($matches)!==1)$this->required();$index=array_key_first($matches);$entry=$matches[$index];
+        foreach(['entries','legacyClaims']as$bucket)foreach($state[$bucket]??[]as$i=>$entry)if(($entry['id']??null)===$entryId||($entry['sourceOperationId']??null)===$source)$matches[$bucket.':'.$i]=[$bucket,$i,$entry];
+        if(count($matches)!==1)$this->required();[$bucket,$index,$entry]=array_values($matches)[0];
         if(array_diff(array_keys($entry),['id','content','createdAt','read','claimed','sourceOperationId','payloadHash'])||count($entry)!==7)$this->required();
         $content=self::content($entry['content']);
         if($content['type']!=='achievement'||$content['reference']!==$achievementKey)$this->required();
@@ -67,14 +67,16 @@ class InboxLegacyRewards
         }
         if(count($found)>1||(!$entry['claimed']&&$found))$this->required();
         if(!$entry['claimed']){
-            $state['entries'][$index]['claimed']=true;$state['entries'][$index]['read']=true;$state=InboxRules::bump($state);
-            $q=$this->pdo->prepare('UPDATE inbox_state SET data=? WHERE user_id=? AND data=?');$q->execute([InboxRules::json($state),$user,$raw]);
+            $state[$bucket][$index]['claimed']=true;$state[$bucket][$index]['read']=true;$state=InboxRules::bump($state);
+            $q=$this->pdo->prepare('UPDATE inbox_state SET data=? WHERE user_id=? AND '.($this->mysql?'BINARY data=BINARY ?':'data=? COLLATE BINARY'));$q->execute([$state['_compact']?InboxStorage::encodeState($state):InboxRules::json(array_diff_key($state,array_flip(['_compact','sourceEntries','freeTextEntries','rewardStates','ordinaryMarkers','legacyClaims']))),$user,$raw]);
             if($q->rowCount()!==1)InboxRules::fail('STATE_CONFLICT','Original Inbox reward changed');
             $this->values->grantFromSource($user,$amounts,$operation,($this->clock)(),$operation);
         } elseif($found) {
-            // Remove only the proven duplicate guard. The claimed source remains authoritative.
+            // Only the exact guard moves to the durable source; never reopen its acceptance time.
+            foreach($found as$i)$valueState['evictedThroughMillis']=max($valueState['evictedThroughMillis'],$valueState['receipts'][$i]['issuedAtMillis']);
+            $valueState['revision']=PlayerValuesLedger::integer($valueState['revision'],0,PlayerValuesLedger::MAX-1)+1;
             $valueState['receipts']=array_values(array_filter($valueState['receipts'],static function($r)use($operation){return $r['operationId']!==$operation;}));
-            $q=$this->pdo->prepare('UPDATE player_values SET data=? WHERE user_id=? AND data=?');
+            $q=$this->pdo->prepare('UPDATE player_values SET data=? WHERE user_id=? AND '.($this->mysql?'BINARY data=BINARY ?':'data=? COLLATE BINARY'));
             $q->execute([PlayerValuesStorage::encode($valueState,$config['knownKeys']),$user,$valueRaw]);
             if($q->rowCount()!==1)InboxRules::fail('STATE_CONFLICT','Original value guard changed');
         }

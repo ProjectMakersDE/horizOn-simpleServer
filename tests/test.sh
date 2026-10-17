@@ -1092,6 +1092,7 @@ assert_status 'removed reward cannot regrant' 404 "$INB_AFTER_REMOVE"
 INB_ADMIN=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$TEST_PORT/api/v1/admin/inbox/broadcasts" -H "X-API-Key: $API_KEY")
 assert_status 'inbox operator routes are not public app administration' 404 "$INB_ADMIN"
 if php tests/inbox.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/inbox-compact.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 if php tests/inbox-migration.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
 # ---- Friends: real authenticated REST and independent SQL concurrency/rollback regressions ----

@@ -4,6 +4,7 @@ declare(strict_types=1);
 require_once __DIR__.'/../src/Core/Database.php';
 require_once __DIR__.'/../src/Achievements/AchievementMigration.php';
 require_once __DIR__.'/../src/Inbox/InboxService.php';
+require_once __DIR__.'/inbox-fixtures.php';
 $checks=0;
 function same($want,$got,string $why):void{global $checks;if($want!==$got)throw new RuntimeException($why.': '.json_encode([$want,$got]));$checks++;}
 function fails(string $code,callable $work):void{try{$work();}catch(AchievementFailure $e){same($code,$e->errorCode,'achievement failure');return;}catch(InboxFailure $e){same($code,$e->errorCode,'inbox failure');return;}catch(PlayerValuesFailure $e){same($code,$e->errorCode,'value failure');return;}throw new RuntimeException('Expected '.$code);}
@@ -38,8 +39,20 @@ try{
  same(true,$migration->player($legacy),'pending migration');same(false,$migration->player($legacy),'repeated migration');same(3,$values->get($legacy)['values'][0]['balance'],'original reward not changed catalogue99');
  same(null,$service->get($legacy)['progress'][0]['unlockedAt'],'legacy date removed only after settlement');same([],$inbox->get($legacy)['entries'],'no new Inbox migration copy');
  // Authentic old pending-to-delivered handoff. Original message and source identify the same reward.
- $delivered=static function(string $id,bool $claim=false)use($old,$inbox,$seed,$now){$r=$old('old');$source='achievement:'.$r['sourceId'];$r['inboxEntryId']=$inbox->deliver($id,$r['pending'],$source,$now,$source)['entryId'];$r['pending']=null;$r['rewardState']='delivered';$seed($id,[$r]);if($claim)$inbox->claim($id,$r['inboxEntryId']);return $r;};
+ $delivered=static function(string $id,bool $claim=false)use($old,$inbox,$seed,$now,$pdo){$r=$old('old');$source='achievement:'.$r['sourceId'];$r['inboxEntryId']=legacyInboxFixture($pdo,$id,$r['pending'],$source,$now,$claim);$r['pending']=null;$r['rewardState']='delivered';$seed($id,[$r]);if($claim)$inbox->claim($id,$r['inboxEntryId']);return $r;};
  foreach([false,true] as $claimed){$id=$user();$r=$delivered($id,$claimed);same(true,$migration->player($id),'delivered settlement');same(3,$values->get($id)['values'][0]['balance'],'claimed/unclaimed credit once');same(true,$inbox->get($id)['entries'][0]['claimed'],'original source now claimed');$inbox->claim($id,$r['inboxEntryId']);same(3,$values->get($id)['values'][0]['balance'],'original claim retry no duplicate');}
+ // A genuinely old claimed source still carries a duplicate legacy PV receipt: move only that guard.
+ $oldClaim=$user();$r=$old('old');$source='achievement:'.$r['sourceId'];
+ $r['inboxEntryId']=legacyInboxFixture($pdo,$oldClaim,$r['pending'],$source,$now,false);$operation='inbox:'.$r['inboxEntryId'];$amounts=$r['pending']['attachment']['values'];
+ $values->grant($oldClaim,$amounts,$operation,$now,$operation);
+ $q=$pdo->prepare('SELECT data FROM inbox_state WHERE user_id=?');$q->execute([$oldClaim]);$mail=json_decode($q->fetchColumn(),true);$mail['entries'][0]['claimed']=true;$mail['entries'][0]['read']=true;
+ $pdo->prepare('UPDATE inbox_state SET data=? WHERE user_id=?')->execute([InboxRules::json($mail),$oldClaim]);$r['pending']=null;$r['rewardState']='delivered';$seed($oldClaim,[$r]);
+ $config=$values->config(false);$q=$pdo->prepare('SELECT data FROM player_values WHERE user_id=?');$q->execute([$oldClaim]);$beforePv=PlayerValuesStorage::decode($q->fetchColumn(),$config['knownKeys']);
+ same(1,count($beforePv['receipts']),'authentic old retained duplicate guard');same(true,$migration->player($oldClaim),'claimed original guard migration');
+ $q->execute([$oldClaim]);$afterPv=PlayerValuesStorage::decode($q->fetchColumn(),$config['knownKeys']);
+ same([],$afterPv['receipts'],'only proven receipt removed');same($now,$afterPv['evictedThroughMillis'],'old acceptance floor closes');same($beforePv['revision']+1,$afterPv['revision'],'guard migration advances values revision');
+ foreach(['values','day','today','adjustedToday','initializedKeys']as$field)same($beforePv[$field],$afterPv[$field],'source guard migration preserves '.$field);
+ fails('OPERATION_EXPIRED',static function()use($values,$oldClaim,$amounts,$operation,$now){$values->grant($oldClaim,$amounts,$operation,$now,$operation);});same(3,$values->get($oldClaim)['values'][0]['balance'],'old standalone receipt cannot reopen');
  $missing=$user();$r=$old('old','delivered');$r['inboxEntryId']='message:'.Database::uuid();$seed($missing,[$r]);$before=$raw($missing);
  fails('MIGRATION_REQUIRED',static function()use($migration,$missing){$migration->player($missing);});same($before,$raw($missing),'missing proof preserves source');
  $unknown=$user();$r=$old('old');$r['unexplained']='preserve';$seed($unknown,[$r]);$before=$raw($unknown);
@@ -55,7 +68,7 @@ try{
  }
  // A valid source UUID alone must not bind a message for a different achievement key.
  $wrongKey=$user();$r=$old('second');$source='achievement:'.$r['sourceId'];
- $r['inboxEntryId']=$inbox->deliver($wrongKey,$r['pending'],$source,$now,$source)['entryId'];$r['key']='old';$r['pending']=null;$r['rewardState']='delivered';$seed($wrongKey,[$r]);$before=$raw($wrongKey);
+ $r['inboxEntryId']=legacyInboxFixture($pdo,$wrongKey,$r['pending'],$source,$now);$r['key']='old';$r['pending']=null;$r['rewardState']='delivered';$seed($wrongKey,[$r]);$before=$raw($wrongKey);
  fails('MIGRATION_REQUIRED',static function()use($migration,$wrongKey){$migration->player($wrongKey);});same($before,$raw($wrongKey),'wrong content identity preserved');
  // Legacy value guard claiming a credit while the Inbox flag says unclaimed is contradictory.
  $ambiguous=$user();$r=$delivered($ambiguous);$operation='inbox:'.$r['inboxEntryId'];$values->grant($ambiguous,[['key'=>'coins','amount'=>3]],$operation,$now,$operation);$before=$raw($ambiguous);
@@ -67,7 +80,7 @@ try{
  same(true,$migration->player($proven),'proven guard converted');same(3,$values->get($proven)['values'][0]['balance'],'proven original not reissued');
  $q=$pdo->prepare('SELECT data FROM player_values WHERE user_id=?');$q->execute([$proven]);same('',json_decode($q->fetchColumn(),true)['q'],'only proven guard removed');
  // Any later balance failure rolls back earlier Inbox settlement and every source bit.
- $fail=$user();$r=$old('old');$source='achievement:'.$r['sourceId'];$r['inboxEntryId']=$inbox->deliver($fail,$r['pending'],$source,$now,$source)['entryId'];$r['pending']=null;$r['rewardState']='delivered';
+ $fail=$user();$r=$old('old');$source='achievement:'.$r['sourceId'];$r['inboxEntryId']=legacyInboxFixture($pdo,$fail,$r['pending'],$source,$now);$r['pending']=null;$r['rewardState']='delivered';
  $seed($fail,[$r,$old('second','pending',1000)]);$before=$raw($fail);
  fails('MAX_BALANCE_REACHED',static function()use($migration,$fail){$migration->player($fail);});same($before,$raw($fail),'failed settlement source unchanged');same(false,$inbox->get($fail)['entries'][0]['claimed'],'earlier Inbox change rolled back');same(0,$values->get($fail)['values'][0]['balance'],'all credits rolled back');
  // Administrable counts grow past former hardcoded250/500, then lower without truncating reads.

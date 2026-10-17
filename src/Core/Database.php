@@ -59,6 +59,7 @@ class Database
         self::ensureGiftCodeValues($pdo);
         self::ensureAchievementsConfig($pdo);
         self::ensureMarketOperations($pdo);
+        self::ensureInboxColumns($pdo);
         // Millisecond registration cutoff prevents a post-publication signup in the same second qualifying.
         self::ensureUserActivityColumns($pdo);
 
@@ -98,7 +99,7 @@ class Database
     {
         if ($pdo->query('SELECT id FROM inbox_catalog WHERE id = 1')->fetch() !== false) return;
         $insert = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql' ? 'INSERT IGNORE' : 'INSERT OR IGNORE';
-        $state = ['apiKeyId' => self::uuid(), 'revision' => 0, 'entries' => [], 'receipts' => [], 'evictedThroughMillis' => 0];
+        $state = ['s' => 1, 'p' => self::uuid(), 'r' => 0];
         $pdo->prepare($insert . ' INTO inbox_catalog(id,data) VALUES (1,?)')->execute([json_encode($state, JSON_THROW_ON_ERROR)]);
     }
 
@@ -125,6 +126,16 @@ class Database
         foreach(['create_actor','create_operation','close_actor','close_operation']as$column)if(!in_array($column,$columns,true))
             $pdo->exec('ALTER TABLE market_listings ADD COLUMN '.$column.($driver==='mysql'?' CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL':' TEXT COLLATE BINARY'));
         foreach(['create','close']as$slot)self::createIndexIfNotExists($pdo,$driver,'idx_market_'.$slot.'_operation','market_listings',$slot.'_actor,'.$slot.'_operation',true,true);
+    }
+
+    /** Additive projections only; legacy JSON is reconciled explicitly by the cold migration. */
+    public static function ensureInboxColumns(PDO $pdo): void
+    {
+        $driver=$pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        self::addColumnIfNotExists($pdo,$driver,'inbox_state','next_expiry','INTEGER','BIGINT NULL');
+        self::addColumnIfNotExists($pdo,$driver,'market_listings','return_entry','TEXT COLLATE BINARY','VARCHAR(46) CHARACTER SET ascii COLLATE ascii_bin NULL');
+        self::createIndexIfNotExists($pdo,$driver,'idx_inbox_expiry','inbox_state','next_expiry,user_id',false,true);
+        self::createIndexIfNotExists($pdo,$driver,'idx_market_inbox_return','market_listings','return_owner,return_entry',false,true);
     }
 
     public static function ensureAchievementsConfig(PDO $pdo): void

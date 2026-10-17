@@ -922,63 +922,91 @@ Storage uses one small singleton catalog row and one `statistics_state` JSON row
 
 ## Inbox (Develop)
 
-The authenticated app routes are `GET /api/v1/app/inbox?userId=UUID&since=CURSOR`,
-`POST /api/v1/app/inbox/read`, `/inbox/claim` and `/inbox/remove`. Actions take
-`{userId,entryId}` and require that player's active Bearer session plus the installation API
-key. A snapshot includes an opaque cursor, revisions, current `serverTime`, per-type counters,
-limits and `pollAfterSeconds:120`. A matching cursor returns `unchanged:true` with empty
-entries: preserve the existing client list. A changed snapshot replaces it, including removals.
-Expiry transitions change the cursor without database writes. Realtime remains Cloud-only.
+Player routes are `GET /api/v1/app/inbox?userId=UUID&since=CURSOR` and
+`POST /api/v1/app/inbox/read`, `/inbox/claim`, `/inbox/remove` with `{userId,entryId}`.
+They require the matching player Bearer session and installation API key. A snapshot has
+`userId,cursor,revision,broadcastRevision,serverTime,pollAfterSeconds,unchanged,entries,counts,limits`.
+Keep cached entries on `unchanged:true`; replace the complete list otherwise. Source changes
+and expiry can change the opaque cursor without a recipient write. Polling defaults to120 seconds.
+Realtime is unavailable on simpleServer.
 
-Each player has at most 50 targeted messages. One installation-wide catalogue retains at most
-500 broadcasts without fanout. Per-player interaction markers are bounded to 500; reward
-markers remain pinned. Messages have a serialized 1024-byte UTF-8 budget, at most 8 distinct
-positive safe-integer value rewards, and at most 30 days normal lifetime. Unclaimed rewards
-become overdue but remain visible/claimable. They cannot be removed. Reward broadcasts stay
-retained and cannot be deleted, even after individual players claim them; they consume capacity.
-A full inbox rejects delivery so the source can remain pending. Unknown reward kinds/keys or
-amounts above the configured maximum balance are rejected before accepting delivery.
+System messages use typed Friends/Groups/Match/Market source references rather than personal
+body copies. Each source tuple has34 binary payload bytes before Base64/JSON overhead. Bounded
+metadata projections resolve the current source; opaque Match payloads and item catalogue bases
+are not loaded for display. A source generation is monotone against the existing Inbox revision,
+even after physical cleanup or a backward clock. Always retain the returned complete entry ID;
+a stale read/remove cannot acknowledge a later event on the same source.
 
-Claims use the entry ID as permanent action identity. The claim guard and player-value ledger
-share one explicitly connection-bound `SqlTransaction`, including SQLite 7.4's SQL
-`BEGIN IMMEDIATE`/`COMMIT`/`ROLLBACK`. A failed grant rolls both effects back. A lost commit
-acknowledgement returns 409 `STATE_CONFLICT`: retry the same entry ID. The marker prevents
-another grant after value receipts expire or are evicted. Removing a claimed entry never
-allows regrant. JSON strings, fractions and unsafe amounts are rejected.
+Operator defaults `INBOX_TARGETED=50`, `INBOX_BROADCASTS=500`, `INBOX_FREE_TEXTS=2`,
+`INBOX_FREE_TEXT_BYTES=256`, `INBOX_FREE_TEXT_RETENTION_DAYS=7` are positive configurable integers.
+Raised limits work beyond the defaults. Lowered limits preserve retained reads, valuable originals
+and existing claim state, and restrict further growth. Shared broadcast/legacy content keeps its
+existing1024-byte envelope, eight unique positive safe-integer value rewards and30-day ordinary
+protocol lifetime. Personal plain text has the separately configurable bounds above.
 
-Broadcast/support administration is local CLI only; the public app key cannot authorize it:
+Valuable broadcasts are shared once per installation, retained indefinitely, cannot be deleted,
+and occupy the existing broadcast capacity. Their retained relative order is the permanent reward
+slot mapping: no duplicate UUID list, slot shift/reuse or extra lifetime cap. Per-player status uses
+two bits per actually reached slot, without a500-slot reserve. Only actually interacted live ordinary
+broadcasts need17-byte UUID/status markers; one indexed earliest-expiry field covers physical cleanup.
 
-```bash
+`attachment.values` can be empty while a trusted `attachment.itemReturn` still makes an entry
+valuable. Claims return `{entryId,replayed,inbox,playerValues,items}`; item references contain
+`instanceId,itemKey`, not a complete inventory instance. Adopt current server values and explicitly
+refresh inventory after an item return. Never grant a local delta. Unclaimed valuable originals
+remain overdue/claimable and cannot be removed. Claim guard, source consumption and value/item
+transfer share one connection-bound `SqlTransaction`. Failure rolls all effects back; uncertain commit
+returns409 STATE_CONFLICT and requires the same entry ID. A consumed exact Market source can prove
+replay after recipient tuple removal. Missing proof never causes another grant.
+
+Local operator commands (no public PHP admin/grant route):
+
+```sh
 php bin/inbox.php broadcasts
 php bin/inbox.php player PLAYER_UUID
-php bin/inbox.php publish EXPECTED_REVISION < persisted-publication.json
+php bin/inbox.php publish ORIGINAL_EXPECTED_REVISION < original-publication.json
 php bin/inbox.php remove-broadcast EXPECTED_REVISION broadcast:UUID
+php bin/inbox.php free-text < original-plain-intent.json
+php bin/inbox.php cleanup
 ```
 
-A publication JSON contains `operationId` (`unixMillis:UUID`), `type`, `reference`, `textKey`,
-`parameters`, `expiresAt` (ISO instant), and optional `attachment:{values:[{key,amount}]}`.
-Use the catalogue's current server time to create the ID/expiry, persist the whole intent before
-publishing, and retry it unchanged. A retained identical operation replays before stale revision,
-capacity or expiry checks. Delivery/publication retain 50 receipts, a 30-day window and a permanent
-eviction floor; unknown old/out-of-order operations fail closed. New anonymous/Apple accounts
-record millisecond registration times, so accounts created after publication are ineligible even
-within the same second. Existing installations retain their legacy UTC registration date.
+A publication contains original `operationId` (`unixMillis:UUID`), `type,reference,textKey,parameters,
+expiresAt,attachment`. Persist the entire body and **original expected revision** before sending.
+The catalogue's fresh serverTime anchors a genuinely new intent. A retained identical replay is
+checked before stale If-Match, expiry, changed definitions and capacity; never silently retry using
+the current revision or a new UUID. Audience is registration no later than publication plus the
+current active session, without enumerating/fanning out to users.
 
-Internal source owners use `InboxService::deliver(userId, content, operationId, issuedAtMillis,
-source)` with their persisted intent. When source state changes too, construct both services with
-the same `SqlTransaction` instance. `deliverPending(..., complete)` is reserved for durable
-pending returns: its adapter receives the exact PDO and proposed entry ID and must conditionally
-mark that specific source/recipient delivered. A false guard rolls back the inbox write. Only this
-path can deliver an old valuable return below the usual receipt floor/window. Never invent a new
-operation ID to bypass an uncertain result. No public HTTP delivery/grant endpoint exists.
+Trusted personal composition accepts exactly `apiKeyId,userId,operationId,issuedAt,expiresAt,freeText,
+expectedRevision`. UUIDs, nonnegative safe integer revision and millisecond ISO instants are strict;
+text is plain UTF-8/nonblank with no attachment or localization object. Persist the complete original
+intent. UUIDv3 identity binds `project:user:operation:expectedRevision:issuedAtMillis`, exactly as
+Kotlin. Retained identical retries precede today's byte/day limits and never refresh TTL/generation.
+Changed text/expiry conflicts; absent/pruned originals with stale revision conflict. The existing
+durable trusted example preserves this revision/body across restart; already stored legacy recipes
+may only prove an exact previously accepted legacy operation, never create another rich message.
 
-The PHP implementation reads the complete bounded catalogue rather than a cache. Snapshot
-feature I/O is three small/bounded reads (player, catalogue, state); a normal interaction adds one
-state write. A normal reward claim additionally uses the existing player-values reads and one
-ledger write in the same transaction. Shared API authentication and migration checks are separate.
-SQL state is deleted with its owning user through foreign-key cascade. Run `php tests/inbox.php`
-for actual storage/rollback/concurrent-claim/publication/receipt/retention proofs, and
-`HORIZON_TEST_PORT=18765 bash tests/test.sh` for authenticated HTTP parity and CLI isolation.
+Legacy GETs preserve original envelopes, dates, hashes and finite receipts. New source events add no
+normal Inbox/PV receipt ring. Explicit cold conversion wraps finite old originals and converts
+broadcast markers without losing an unresolved reward. Unknown fields, inconsistent source proof
+or a missing valuable original fail409 MIGRATION_REQUIRED with raw state unchanged. Do not rebuild
+old rewards from today's definitions. Stop every writer, make a backup and verify a restoration before:
+
+```sh
+php bin/inbox.php compact-inspect - 100
+php bin/inbox.php compact-apply - 100 --writes-stopped --backup-verified
+php bin/inbox.php sources-inspect - 100
+php bin/inbox.php sources-apply - 100 --writes-stopped --backup-verified
+```
+
+Continue using the exact nextCursor until complete. Inspect only lists candidates; apply validates
+and converts each transactionally. The source command backfills only indexed Market replay identity
+under original raw JSON CAS. Startup adds schema/projections only, never scans/converts historical
+JSON or awards values. PHP SQL/Base64/record/index lengths are measured separately from Mongo BSON.
+Source adapters read bounded batches of at most200 identities; base feature I/O is player, catalogue
+and Inbox state plus the actual required source projections, not an assumed constant three reads.
+Run `php tests/inbox.php` for real SQLite/MySQL storage, rollback, clock, slot and process-race proofs,
+and the full `tests/test.sh` for authenticated HTTP/CLI isolation.
 
 ## Achievements (TASK-1008)
 
@@ -1403,12 +1431,11 @@ nor offers run-ticket validation or anti-cheat guarantees. A player-written obje
 or result cannot authorize a victory, grant, currency change or trusted notice.
 
 After verification, the backend freezes a single ordinary notice intent:
-`apiKeyId,userId,operationId,issuedAt,expiresAt,textKey,reference,parameters`, together
+`apiKeyId,userId,operationId,issuedAt,expiresAt,freeText,expectedRevision`, together
 with `{defenseObjectId,defenseRevision,runId}`. Use the installation Inbox catalog's
-`apiKeyId`, a fresh once-persisted UUID, original issued time and a deadline no more
-than7days later. There are no attachments or rewards. The local operator command
-`php bin/shared-objects.php notice < immutable-intent.json` uses the normal Inbox
-receipt/floor path and never the pending-source bypass.
+`apiKeyId`, a fresh once-persisted UUID, original expected Inbox revision, issued time and a deadline within the configured
+INBOX_FREE_TEXT_RETENTION_DAYS (default7). There are no attachments or rewards. The local operator command
+`php bin/shared-objects.php notice < immutable-intent.json` uses the plain-text compare-and-set path and never the pending-source bypass.
 
 The executable backend-only example stages the complete intent in an absolute
 path under an existing private directory before delivery:

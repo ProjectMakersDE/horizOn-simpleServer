@@ -54,6 +54,7 @@ class InboxRules
     }
     public static function content(array $input,bool $trustedReturn=false): array
     {
+        if(array_diff(array_keys($input),['type','reference','textKey','parameters','expiresAt','attachment','operationId']))self::invalid('Unknown content field');
         $type = $input['type'] ?? null;
         if (!is_string($type) || !preg_match('/^[A-Za-z0-9._-]{1,32}$/D', $type)) self::invalid('Invalid type');
         $reference = self::text(array_key_exists('reference', $input) ? $input['reference'] : '', 128); $text = self::text($input['textKey'] ?? null, 128, false);
@@ -75,7 +76,7 @@ class InboxRules
             }
             $values = PlayerValuesLedger::list(array_key_exists('values', $attachment) ? $attachment['values'] : [], 8); $keys = [];
             foreach ($values as &$value) {
-                if (!is_array($value)) self::invalid('Invalid attachment');
+                if (!is_array($value)||count($value)!==2||array_diff(array_keys($value),['key','amount'])) self::invalid('Invalid attachment');
                 $key = PlayerValuesLedger::key($value['key'] ?? null); $amount = PlayerValuesLedger::integer($value['amount'] ?? null, 1);
                 if (isset($keys[$key])) self::invalid('Duplicate value reward');
                 $keys[$key] = true; $value = ['key' => $key, 'amount' => $amount];

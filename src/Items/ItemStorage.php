@@ -62,6 +62,18 @@ class ItemStorage
             $items[]=['instanceId'=>$id,'itemKey'=>'','properties'=>(object)[],'equipped'=>$flags===1,'createdAt'=>PlayerValuesLedger::instant($time),'_basis'=>['version'=>$version,'deltas'=>$deltas]];
         }return $items;
     }
+    /** Pure escrow identity proof. Compact basis hydration remains the transfer owner's responsibility. */
+    public static function escrowMatches(?array $raw,array $reference):bool {
+        try {
+            if($raw===null||!isset($reference['instanceId'],$reference['itemKey']))return false;
+            if(isset($raw['s'])){
+                if($raw['s']!==1||!is_string($raw['b']??null))return false;
+                $items=self::unpack(self::binary($raw['b']));
+                return count($items)===1&&$items[0]['instanceId']===$reference['instanceId']&&!$items[0]['equipped'];
+            }
+            return ($raw['instanceId']??null)===$reference['instanceId']&&($raw['itemKey']??null)===$reference['itemKey']&&($raw['equipped']??false)===false;
+        } catch(Throwable $failure){return false;}
+    }
     public static function hydrate(array $item,array $basis):array {
         if($item['_basis']['version']!==$basis['version'])self::corrupt();$properties=clone $basis['properties'];
         $keys=array_keys(get_object_vars($properties));sort($keys,SORT_STRING);

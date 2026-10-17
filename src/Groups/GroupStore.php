@@ -68,6 +68,8 @@ class GroupStore
         $query = $this->pdo->prepare('UPDATE groups_state SET revision=?,data=? WHERE id=? AND revision=?');
         $query->execute([$after['revision'], GroupRules::json($after), $before['id'], $before['revision']]); if ($query->rowCount() !== 1) GroupRules::conflict();
         $this->pdo->prepare('DELETE FROM group_pending_references WHERE group_id=?')->execute([$before['id']]);
+        $this->pdo->prepare('DELETE FROM group_inbox_sources WHERE group_id=?')->execute([$before['id']]);
+        foreach(array_merge($after['invitations'],$after['joinRequests'])as$entry)$this->pdo->prepare('INSERT INTO group_inbox_sources(request_id,group_id) VALUES(?,?)')->execute([$entry['requestId'],$before['id']]);
         $ids = []; foreach (array_merge($after['invitations'], $after['joinRequests']) as $entry) { $ids[$entry['userId']] = true; $ids[$entry['issuerId']] = true; }
         if (count($ids) > 80) throw new LogicException('Group pending bound exceeded');
         if ($ids) { $args = []; foreach (array_keys($ids) as $id) { $args[] = $id; $args[] = $before['id']; }
