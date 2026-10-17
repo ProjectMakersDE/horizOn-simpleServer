@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require_once __DIR__.'/SharedObjectStore.php';
+require_once __DIR__.'/../Core/SqlTransaction.php';
 /** Offline, feature-local cold conversion. Never called by bootstrap, a read or an HTTP route. */
 class SharedObjectMigration
 {
@@ -49,23 +50,30 @@ class SharedObjectMigration
         $q=$this->pdo->prepare('SELECT 1 FROM '.$base.$suffix.' WHERE '.implode(' OR ',$where).' LIMIT 1');$q->execute($args);if($q->fetchColumn()!==false)SharedObjectStorage::required();
     }
     /** Unknown indexes, constraints and triggers are not silently lost at cold replacement. */
-    private function attestLegacy(string $base,string $suffix):void {
-        $table=$base.$suffix;$indexes=[];
+    private function expectedIndexes(string $base,bool $compact):array {
+        $expected=self::INDEXES[$base];if(!$compact)return $expected;
+        if($base==='shared_object_collections')return ['PRIMARY'=>['c'],'k'=>['k']];
+        $mapped=[];$names=['collection_key'=>'c','partition_key'=>'q','owner_id'=>'o','user_id'=>'u','slot0'=>'s0','slot1'=>'s1','slot2'=>'s2','position_x'=>'x','expires_millis'=>'e'];
+        foreach($expected as$name=>$columns){$next=$name==='PRIMARY'?'PRIMARY':str_replace('idx_shared_','idx_shared_v1_',$name);$mapped[$next]=array_map(static function($c)use($base,$names){if($c==='id'&&in_array($base,['shared_objects','shared_object_payloads'],true))return 'i';return $names[$c]??$c;},$columns);}
+        if($base==='shared_objects')$mapped['idx_shared_v1_partition_owner']=['f','q','i'];return $mapped;
+    }
+    private function attestLegacy(string $base,string $suffix,bool $compact=false):void {
+        $table=$base.$suffix;$indexes=[];$expected=$this->expectedIndexes($base,$compact);
         if($this->mysql){
             $q=$this->pdo->prepare('SELECT INDEX_NAME,COLUMN_NAME,NON_UNIQUE,SUB_PART FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? ORDER BY INDEX_NAME,SEQ_IN_INDEX');$q->execute([$table]);
-            foreach($q->fetchAll(PDO::FETCH_ASSOC)as$r){if($r['SUB_PART']!==null||(int)$r['NON_UNIQUE']!==($r['INDEX_NAME']==='PRIMARY'?0:1))SharedObjectStorage::required();$indexes[$r['INDEX_NAME']][]=$r['COLUMN_NAME'];}
+            foreach($q->fetchAll(PDO::FETCH_ASSOC)as$r){if($r['SUB_PART']!==null||(int)$r['NON_UNIQUE']!==(in_array($r['INDEX_NAME'],['PRIMARY','k'],true)?0:1))SharedObjectStorage::required();$indexes[$r['INDEX_NAME']][]=$r['COLUMN_NAME'];}
             $q=$this->pdo->prepare('SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() AND EVENT_OBJECT_TABLE=?');$q->execute([$table]);if((int)$q->fetchColumn())SharedObjectStorage::required();
             $q=$this->pdo->prepare("SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=DATABASE() AND TABLE_NAME=? AND CONSTRAINT_TYPE='CHECK'");$q->execute([$table]);if((int)$q->fetchColumn())SharedObjectStorage::required();
             $q=$this->pdo->prepare('SELECT COLUMN_NAME,REFERENCED_TABLE_NAME,REFERENCED_COLUMN_NAME FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND REFERENCED_TABLE_NAME IS NOT NULL ORDER BY ORDINAL_POSITION');$q->execute([$table]);$foreign=$q->fetchAll(PDO::FETCH_NUM);
             $q=$this->pdo->prepare('SELECT UPDATE_RULE,DELETE_RULE FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=DATABASE() AND TABLE_NAME=?');$q->execute([$table]);foreach($q->fetchAll(PDO::FETCH_ASSOC)as$r)if(!in_array($r['UPDATE_RULE'],['RESTRICT','NO ACTION'],true)||$r['DELETE_RULE']!==($base==='shared_object_usage'?'SET NULL':'CASCADE'))SharedObjectStorage::required();
         }else{
             $info=$this->pdo->query('PRAGMA table_info('.$table.')')->fetchAll(PDO::FETCH_ASSOC);$primary=[];foreach($info as$r)if($r['pk'])$primary[(int)$r['pk']]=$r['name'];ksort($primary);$indexes['PRIMARY']=array_values($primary);
-            foreach($this->pdo->query('PRAGMA index_list('.$table.')')->fetchAll(PDO::FETCH_ASSOC)as$r){if($r['origin']==='pk')continue;if((int)$r['unique']!==0||(int)$r['partial']!==0||!isset(self::INDEXES[$base][$r['name']]))SharedObjectStorage::required();$indexes[$r['name']]=array_column($this->pdo->query('PRAGMA index_info('.$r['name'].')')->fetchAll(PDO::FETCH_ASSOC),'name');}
+            foreach($this->pdo->query('PRAGMA index_list('.$table.')')->fetchAll(PDO::FETCH_ASSOC)as$r){if($r['origin']==='pk')continue;$name=$compact&&$base==='shared_object_collections'&&$r['origin']==='u'?'k':$r['name'];if((int)$r['unique']!==($name==='k'?1:0)||(int)$r['partial']!==0||!isset($expected[$name]))SharedObjectStorage::required();$indexes[$name]=array_column($this->pdo->query('PRAGMA index_info('.$r['name'].')')->fetchAll(PDO::FETCH_ASSOC),'name');}
             $q=$this->pdo->prepare("SELECT type,sql FROM sqlite_master WHERE tbl_name=? AND type IN ('table','trigger')");$q->execute([$table]);foreach($q->fetchAll(PDO::FETCH_ASSOC)as$r)if($r['type']==='trigger'||preg_match('/\bCHECK\s*\(/i',$r['sql']))SharedObjectStorage::required();
             $foreign=[];foreach($this->pdo->query('PRAGMA foreign_key_list('.$table.')')->fetchAll(PDO::FETCH_ASSOC)as$r){if($r['on_update']!=='NO ACTION'||$r['on_delete']!==($base==='shared_object_usage'?'SET NULL':'CASCADE'))SharedObjectStorage::required();$foreign[]=[$r['from'],$r['table'],$r['to']];}
         }
-        $expected=self::INDEXES[$base];ksort($expected);ksort($indexes);if($indexes!==$expected)SharedObjectStorage::required();
-        $expectedForeign=$base==='shared_object_usage'?[['active_user_id','users','id']]:($base==='shared_object_payloads'?[['id','shared_objects'.$suffix,'id']]:[]);
+        ksort($expected);ksort($indexes);if($indexes!==$expected)SharedObjectStorage::required();
+        $id=$compact?'i':'id';$expectedForeign=$base==='shared_object_usage'?[['active_user_id','users','id']]:($base==='shared_object_payloads'?[[$id,'shared_objects'.$suffix,$id]]:[]);
         if($foreign!==$expectedForeign)SharedObjectStorage::required();
     }
     public function plan():array {
@@ -81,6 +89,29 @@ class SharedObjectMigration
     private function schema(string $suffix):string {
         $sql=file_get_contents(__DIR__.'/../../migrations/shared-objects-'.($this->mysql?'mysql':'sqlite').'.sql');
         foreach(array_reverse(SharedObjectSchema::TABLES)as$table)$sql=preg_replace('/\b'.preg_quote($table,'/').'\b/',$table.$suffix,$sql);return $sql;
+    }
+    private function guardExists():bool {
+        return (int)$this->pdo->query($this->mysql?"SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='shared_object_migration1012'":"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='shared_object_migration1012'")->fetchColumn()!==0;
+    }
+    private function guard(string $digest):void {
+        if(!$this->guardExists())throw new RuntimeException('Missing migration ownership marker; left unchanged');
+        $columns=$this->mysql?$this->pdo->query("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='shared_object_migration1012' ORDER BY ORDINAL_POSITION")->fetchAll(PDO::FETCH_COLUMN):array_column($this->pdo->query('PRAGMA table_info(shared_object_migration1012)')->fetchAll(PDO::FETCH_ASSOC),'name');
+        if($columns!==['id','v','sha256'])throw new RuntimeException('Unknown migration ownership marker');$rows=$this->pdo->query('SELECT * FROM shared_object_migration1012')->fetchAll(PDO::FETCH_ASSOC);
+        if(count($rows)!==1||(int)$rows[0]['id']!==1||(int)$rows[0]['v']!==1||!is_string($rows[0]['sha256'])||!hash_equals($digest,$rows[0]['sha256']))throw new RuntimeException('Migration ownership marker mismatch');
+    }
+    private function createGuard(string $digest):void {
+        $this->pdo->exec($this->mysql?'CREATE TABLE shared_object_migration1012(id INT PRIMARY KEY,v INT NOT NULL,sha256 CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL) ENGINE=InnoDB':'CREATE TABLE shared_object_migration1012(id INTEGER PRIMARY KEY,v INTEGER NOT NULL,sha256 TEXT NOT NULL)');
+        $q=$this->pdo->prepare('INSERT INTO shared_object_migration1012(id,v,sha256) VALUES(1,1,?)');$q->execute([$digest]);
+    }
+    private function dropDerived(array $tables):void {
+        // One atomic InnoDB DDL statement. SQLite caller owns one writer transaction.
+        if($this->mysql)$this->pdo->exec('DROP TABLE '.implode(',',$tables));else foreach($tables as$t)$this->pdo->exec('DROP TABLE '.$t);
+    }
+    private function maintenance(array $suffixes,callable $work):void {
+        if($this->pdo->inTransaction())throw new RuntimeException('Cold maintenance requires its own connection');
+        if(!$this->mysql){(new SqlTransaction($this->pdo))->run($work);return;}
+        $this->supported();$locks=['users WRITE','shared_object_migration1012 WRITE'];foreach(SharedObjectSchema::TABLES as$t){$locks[]=$t.' WRITE';foreach($suffixes as$suffix)if($this->columns($t.$suffix))$locks[]=$t.$suffix.' WRITE';}
+        $this->pdo->exec('LOCK TABLES '.implode(',',$locks));try{$work();}finally{$this->pdo->exec('UNLOCK TABLES');}
     }
     private function put(string $table,array $row):void {
         $q=$this->pdo->prepare('INSERT INTO '.$table.'_next1012('.implode(',',array_keys($row)).') VALUES('.implode(',',array_fill(0,count($row),'?')).')');
@@ -117,11 +148,13 @@ class SharedObjectMigration
         if(!$writersStopped||!$backupRestored||!$upgraded||!preg_match('/^[a-f0-9]{64}$/D',$digest)||$this->pdo->inTransaction())throw new RuntimeException('Cold cutover requires exact plan SHA256, stopped writers, tested backup/restore and all readers/writers upgraded');
         if((int)$this->pdo->query($this->mysql?'SELECT @@FOREIGN_KEY_CHECKS':'PRAGMA foreign_keys')->fetchColumn()!==1)throw new RuntimeException('Foreign-key protection must remain enabled');
         $this->supported();foreach(SharedObjectSchema::TABLES as$table)foreach(['_next1012','_legacy1012']as$suffix)if($this->columns($table.$suffix))throw new RuntimeException('Reserved migration tables exist: inspect and explicitly reconcile; no automatic deletion');
+        if($this->guardExists())throw new RuntimeException('Reserved migration ownership marker exists: reconcile explicitly');
+        if($this->mysql&&!hash_equals($this->plan()['sha256'],$digest))throw new RuntimeException('Original Shared Objects changed since the sealed plan');
         $locked=false;$sqliteStarted=false;
         try{
-            if($this->mysql){$this->pdo->exec($this->schema('_next1012'));$locks=['users WRITE'];foreach(SharedObjectSchema::TABLES as$t){$locks[]=$t.' WRITE';$locks[]=$t.'_next1012 WRITE';}$this->pdo->exec('LOCK TABLES '.implode(',',$locks));$locked=true;}
+            if($this->mysql){$this->createGuard($digest);$this->pdo->exec($this->schema('_next1012'));$locks=['users WRITE','shared_object_migration1012 WRITE'];foreach(SharedObjectSchema::TABLES as$t){$locks[]=$t.' WRITE';$locks[]=$t.'_next1012 WRITE';}$this->pdo->exec('LOCK TABLES '.implode(',',$locks));$locked=true;}
             else{$this->pdo->exec('BEGIN IMMEDIATE');$sqliteStarted=true;}
-            $plan=$this->fingerprint();if(!hash_equals($plan['sha256'],$digest))throw new RuntimeException('Original Shared Objects changed since the sealed plan');if(!$this->mysql)$this->pdo->exec($this->schema('_next1012'));
+            $plan=$this->fingerprint();if(!hash_equals($plan['sha256'],$digest))throw new RuntimeException('Original Shared Objects changed since the sealed plan');if(!$this->mysql){$this->createGuard($digest);$this->pdo->exec($this->schema('_next1012'));}
             $this->convert();$this->point('copied');$rename=[];foreach(SharedObjectSchema::TABLES as$t){$rename[]=$t.' TO '.$t.'_legacy1012';$rename[]=$t.'_next1012 TO '.$t;}
             if($this->mysql)$this->pdo->exec('RENAME TABLE '.implode(',',$rename));
             else foreach(SharedObjectSchema::TABLES as$t){$this->pdo->exec('ALTER TABLE '.$t.' RENAME TO '.$t.'_legacy1012');$this->pdo->exec('ALTER TABLE '.$t.'_next1012 RENAME TO '.$t);}
@@ -129,14 +162,20 @@ class SharedObjectMigration
         }finally{if($locked)$this->pdo->exec('UNLOCK TABLES');if($sqliteStarted)$this->pdo->exec('ROLLBACK');}
     }
     public function discardStaging(string $digest,bool $writersStopped,bool $backupRestored):void {
-        if(!$writersStopped||!$backupRestored||!hash_equals($this->plan()['sha256'],$digest))throw new RuntimeException('Staging reconciliation requires unchanged sealed originals, stopped writers and verified backup/restore');
-        foreach(SharedObjectSchema::TABLES as$t)if($this->columns($t.'_legacy1012'))throw new RuntimeException('Already switched: staging must not be discarded');
-        foreach(self::COMPACT as$t=>$columns){$actual=$this->columns($t.'_next1012');if($actual&&$actual!==$columns)throw new RuntimeException('Unknown staging schema: left unchanged');}
-        // Only these reserved derived tables; originals remain the restoration source.
-        foreach(array_reverse(SharedObjectSchema::TABLES)as$t)$this->pdo->exec('DROP TABLE IF EXISTS '.$t.'_next1012');
+        if(!$writersStopped||!$backupRestored)throw new RuntimeException('Staging reconciliation requires stopped writers and verified backup/restore');$this->guard($digest);
+        $this->maintenance(['_next1012'],function()use($digest){
+            $this->guard($digest);if(!hash_equals($this->fingerprint()['sha256'],$digest))throw new RuntimeException('Staging reconciliation requires unchanged sealed originals');
+            foreach(SharedObjectSchema::TABLES as$t)if($this->columns($t.'_legacy1012'))throw new RuntimeException('Already switched: staging must not be discarded');
+            foreach(self::COMPACT as$t=>$columns){$actual=$this->columns($t.'_next1012');if($actual&&$actual!==$columns)throw new RuntimeException('Unknown staging schema: left unchanged');if($actual)$this->attestLegacy($t,'_next1012',true);}
+            // Only these reserved derived tables; originals remain the restoration source.
+            $tables=[];foreach(array_reverse(SharedObjectSchema::TABLES)as$t)if($this->columns($t.'_next1012'))$tables[]=$t.'_next1012';$tables[]='shared_object_migration1012';$this->dropDerived($tables);
+        });
     }
     public function retire(string $digest,bool $writersStopped,bool $backupRestored):void {
-        if(!$writersStopped||!$backupRestored||$this->columns('shared_object_catalog')!==['id','r','n','s']||!hash_equals($this->fingerprint('_legacy1012')['sha256'],$digest))throw new RuntimeException('Retirement requires exact legacy plan, compact cutover, stopped writers and tested backup/restore');
-        foreach(array_reverse(SharedObjectSchema::TABLES)as$t)$this->pdo->exec('DROP TABLE '.$t.'_legacy1012');
+        if(!$writersStopped||!$backupRestored)throw new RuntimeException('Retirement requires stopped writers and tested backup/restore');$this->guard($digest);
+        $this->maintenance(['_legacy1012'],function()use($digest){
+            $this->guard($digest);if($this->columns('shared_object_catalog')!==['id','r','n','s']||!hash_equals($this->fingerprint('_legacy1012')['sha256'],$digest))throw new RuntimeException('Retirement requires exact legacy plan and compact cutover');
+            $tables=array_map(static function($t){return $t.'_legacy1012';},array_reverse(SharedObjectSchema::TABLES));$tables[]='shared_object_migration1012';$this->dropDerived($tables);
+        });
     }
 }

@@ -1512,12 +1512,12 @@ and [atomic InnoDB DDL](https://dev.mysql.com/doc/refman/8.0/en/atomic-ddl.html)
 MySQL locks originals, staging tables and users against concurrent writes, verifies
 the sealed plan, copies into `_next1012`, then atomically renames all six table
 pairs. Before switch, originals are authoritative. Interrupted derived staging
-requires explicit `discard-staging PLAN_SHA256 --writers-stopped
+has a temporary SHA-bound ownership marker and requires explicit `discard-staging PLAN_SHA256 --writers-stopped
 --backup-restore-verified`; it is never silently deleted or resumed. After switch,
 the compact tables are authoritative and `_legacy1012` is only the original
 backup. A lost switch acknowledgement is reconciled by inspecting the actual
 schema and originals; do not rerun apply or reverse newer writes. `retire` checks
-the exact original digest before dropping only those six backup tables. The new
+the exact original digest before atomically dropping only those six backup tables and its temporary ownership marker. The new
 column dialect fences every old configuration/create/update/delete/cleanup SQL
 path; an old `CREATE TABLE IF NOT EXISTS` cannot recreate missing old columns.
 Migration temporarily duplicates records/indexes, which must be budgeted separately;

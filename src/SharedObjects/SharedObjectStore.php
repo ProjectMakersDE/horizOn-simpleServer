@@ -20,7 +20,7 @@ class SharedObjectStore
         return $this->statement('SELECT id FROM users WHERE id IN ('.implode(',',array_fill(0,count($ids),'?')).') ORDER BY id'.$this->lock($lock),$ids)->fetchAll(PDO::FETCH_COLUMN);
     }
     public function catalog(bool $lock=false): array {
-        $r=$this->one('SELECT r,n,s FROM shared_object_catalog WHERE id=1',[],$lock);return $r===null?['revision'=>0,'total'=>0,'nextSlot'=>1,'exists'=>false]:['revision'=>SharedObjectStorage::number($r['r']),'total'=>SharedObjectStorage::number($r['n'],0,SharedObjectStorage::INT_MAX),'nextSlot'=>SharedObjectStorage::number($r['s'],1,SharedObjectStorage::INT_MAX),'exists'=>true];
+        $r=$this->one('SELECT r,n,s FROM shared_object_catalog WHERE id=1',[],$lock);return $r===null?['revision'=>0,'total'=>0,'nextSlot'=>1,'exists'=>false]:['revision'=>SharedObjectStorage::number($r['r']),'total'=>SharedObjectStorage::number($r['n'],0,SharedObjectStorage::INT_MAX),'nextSlot'=>SharedObjectStorage::number($r['s'],1,SharedObjectStorage::INT_MAX+1),'exists'=>true];
     }
     public function saveCatalog(array $before,array $next): void {
         if(!$before['exists'])$this->statement('INSERT INTO shared_object_catalog(id,r,n,s) VALUES(1,?,?,?)',[$next['revision'],$next['total'],$next['nextSlot']]);

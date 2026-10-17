@@ -66,7 +66,7 @@ class SharedObjectService
             if($input['maxObjectBytes']>$this->cap['objectBytes']&&$input['maxObjectBytes']!==($before['maxObjectBytes']??null))SharedObjectRules::invalid();
             if($before===null&&$header['total']>=$this->cap['collections'])SharedObjectRules::fail('COLLECTION_LIMIT_REACHED',422);
             if($before!==null&&$before['used']&&SharedObjectRules::schema($input)!==SharedObjectRules::schema($before))SharedObjectRules::fail('COLLECTION_SCHEMA_LOCKED',422);
-            if($before===null&&$header['nextSlot']>=SharedObjectStorage::INT_MAX)SharedObjectRules::fail('STORAGE_IDENTITY_EXHAUSTED');
+            if($before===null&&$header['nextSlot']>SharedObjectStorage::INT_MAX)SharedObjectRules::fail('STORAGE_IDENTITY_EXHAUSTED');
             $next=['key'=>$key]+$input+['used'=>$before['used']??false,'revision'=>SharedObjectRules::next($before['revision']??0),'_slot'=>$before['_slot']??$header['nextSlot']];$changed=$header;$changed['revision']=SharedObjectRules::next($header['revision']);$changed['total']+=($before===null?1:0);$changed['nextSlot']+=($before===null?1:0);$this->store->saveCatalog($header,$changed);$this->store->saveCollection($before,$next);return ['revision'=>$changed['revision'],'definition'=>SharedObjectStorage::wire($next),'limits'=>$this->cap,'serverTime'=>SharedObjectRules::instant($this->now())];});
     }
     public function limits(): array{return $this->snapshot(function(){$q=$this->store->quota();return ['limits'=>$this->cap,'chargedBytes'=>$q['chargedBytes'],'revision'=>$q['revision']];});}
