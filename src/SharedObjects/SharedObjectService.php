@@ -6,6 +6,7 @@ require_once __DIR__.'/../Core/Config.php';
 require_once __DIR__.'/SharedObjectQuery.php';
 require_once __DIR__.'/../Core/SqlTransaction.php';
 require_once __DIR__.'/../Groups/GroupStore.php';
+require_once __DIR__.'/../Friends/FriendsStorage.php';
 class SharedObjectService
 {
     private PDO $pdo;private bool $mysql;private SqlTransaction $transactions;private SharedObjectStore $store;private SharedObjectQuery $planner;private GroupStore $groups;private $clock;private array $cap;
@@ -86,7 +87,7 @@ class SharedObjectService
     private function friends(string $first,string $second): bool
     {
         $q=$this->pdo->prepare('SELECT user_id,friends,blocked FROM friends_state WHERE user_id IN (?,?)');$q->execute([$first,$second]);$rows=[];foreach($q->fetchAll(PDO::FETCH_ASSOC) as $r)$rows[$r['user_id']]=$r;
-        foreach([[$first,$second],[$second,$first]] as [$owner,$peer]){if(!isset($rows[$owner]))return false;$friends=json_decode($rows[$owner]['friends'],true,512,JSON_THROW_ON_ERROR);$blocked=json_decode($rows[$owner]['blocked'],true,512,JSON_THROW_ON_ERROR);if(!in_array($peer,array_column($friends,'userId'),true)||in_array($peer,array_column($blocked,'userId'),true))return false;}return true;
+        foreach([[$first,$second],[$second,$first]] as [$owner,$peer]){if(!isset($rows[$owner]))return false;$friends=FriendsStorage::field($rows[$owner]['friends'],'friends');$blocked=FriendsStorage::field($rows[$owner]['blocked'],'blocked');if(!in_array($peer,array_column($friends,'userId'),true)||in_array($peer,array_column($blocked,'userId'),true))return false;}return true;
     }
     private function canRead(?string $actor,array $definition,array $row): bool
     {if($actor===null)return true;if($definition['readPolicy']==='dashboard')return false;if($actor===$row['owner_id'])return true;switch($definition['readPolicy']){case 'all':return true;case 'friends':return $this->friends($actor,$row['owner_id']);case 'group':return $row['group_id']!==null&&$this->member($row['group_id'],$actor);default:return false;}}

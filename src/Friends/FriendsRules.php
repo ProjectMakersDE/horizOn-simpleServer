@@ -43,7 +43,7 @@ class FriendsRules
         if (self::code($id) !== $query) self::invalid('Noncanonical friend code');
         return $id;
     }
-    public static function emptyState(): array { return ['revision' => 0, 'friends' => [], 'incoming' => [], 'outgoing' => [], 'blocked' => [], 'exists' => false]; }
+    public static function emptyState(): array { return ['revision' => 0, 'friends' => [], 'incoming' => [], 'outgoing' => [], 'blocked' => [], 'exists' => false, '_legacy' => false]; }
     public static function has(array $entries, string $user): bool { foreach ($entries as $entry) if ($entry['userId'] === $user) return true; return false; }
     public static function without(array $state, string $user, bool $blocks = false): array
     {
@@ -56,18 +56,19 @@ class FriendsRules
         foreach ($entries as $entry) if ($entry['userId'] === $peer && $entry['requestId'] === $request) return $entry;
         self::fail('FRIEND_REQUEST_NOT_FOUND', 'This exact request is no longer available', 404);
     }
-    public static function transition(string $action, string $actor, string $peer, array $a, array $b, ?string $request, string $time, int $maxFriends): array
+    public static function transition(string $action, string $actor, string $peer, array $a, array $b, ?string $request, string $time, int $maxFriends, ?array $limits = null): array
     {
+        $limits = $limits ?? ['maxIncomingRequests'=>self::PENDING,'maxOutgoingRequests'=>self::PENDING,'maxBlocked'=>self::BLOCKED];
         $notice = null;
         if (in_array($action, ['request', 'accept'], true) && (self::has($a['blocked'], $peer) || self::has($b['blocked'], $actor)))
             self::fail('RELATIONSHIP_NOT_ALLOWED', 'Relationship is unavailable', 403);
         switch ($action) {
             case 'request':
                 if (self::has($a['friends'], $peer) || self::has($a['outgoing'], $peer)) break;
-                if (count($a['outgoing']) >= self::PENDING || count($b['incoming']) >= self::PENDING) self::fail('FRIEND_REQUEST_LIMIT_REACHED', 'Pending request capacity reached');
+                if (count($a['outgoing']) >= $limits['maxOutgoingRequests'] || count($b['incoming']) >= $limits['maxIncomingRequests']) self::fail('FRIEND_REQUEST_LIMIT_REACHED', 'Pending request capacity reached');
                 $id = Database::uuid();
-                $a['outgoing'][] = ['userId' => $peer, 'requestId' => $id, 'createdAt' => $time];
-                $b['incoming'][] = ['userId' => $actor, 'requestId' => $id, 'createdAt' => $time];
+                $a['outgoing'][] = ['userId' => $peer, 'requestId' => $id, 'createdAt' => null];
+                $b['incoming'][] = ['userId' => $actor, 'requestId' => $id, 'createdAt' => null];
                 $notice = $id; break;
             case 'accept':
                 $entry = self::request($a['incoming'], $peer, $request);
@@ -75,7 +76,7 @@ class FriendsRules
                 if ((!self::has($a['friends'], $peer) && count($a['friends']) >= $maxFriends) || (!self::has($b['friends'], $actor) && count($b['friends']) >= $maxFriends))
                     self::fail('FRIEND_LIMIT_REACHED', 'Friend capacity reached');
                 $a = self::without($a, $peer); $b = self::without($b, $actor);
-                $a['friends'][] = ['userId' => $peer, 'since' => $time]; $b['friends'][] = ['userId' => $actor, 'since' => $time];
+                $a['friends'][] = ['userId' => $peer, 'since' => null]; $b['friends'][] = ['userId' => $actor, 'since' => null];
                 $notice = $entry['requestId']; break;
             case 'decline': case 'cancel':
                 $own = $action === 'decline' ? 'incoming' : 'outgoing'; $other = $action === 'decline' ? 'outgoing' : 'incoming';
@@ -88,9 +89,9 @@ class FriendsRules
                 $b['friends'] = array_values(array_filter($b['friends'], static function ($row) use ($actor) { return $row['userId'] !== $actor; })); break;
             case 'block':
                 $already = self::has($a['blocked'], $peer);
-                if (!$already && count($a['blocked']) >= self::BLOCKED) self::fail('BLOCK_LIMIT_REACHED', 'Block capacity reached');
+                if (!$already && count($a['blocked']) >= $limits['maxBlocked']) self::fail('BLOCK_LIMIT_REACHED', 'Block capacity reached');
                 $a = self::without($a, $peer); $b = self::without($b, $actor);
-                if (!$already) $a['blocked'][] = ['userId' => $peer, 'blockedAt' => $time]; break;
+                if (!$already) $a['blocked'][] = ['userId' => $peer, 'blockedAt' => null]; break;
             case 'unblock':
                 $a['blocked'] = array_values(array_filter($a['blocked'], static function ($row) use ($peer) { return $row['userId'] !== $peer; })); break;
             default: self::invalid('Unknown social action');

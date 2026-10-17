@@ -1100,6 +1100,7 @@ if php tests/inbox-migration.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1
 if php tests/player-values-compact.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 if php tests/friends-http.php "$BASE_URL" "$API_KEY" "$USER_ID" "$SESSION_TOKEN"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 if php tests/friends.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/friends-compact.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 if php tests/friends-migration.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 
 # ---- Groups: real player REST plus separate-connection SQL/cleanup regressions ----

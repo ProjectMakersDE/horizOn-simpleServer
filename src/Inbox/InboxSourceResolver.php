@@ -3,6 +3,7 @@
 declare(strict_types=1);
 require_once __DIR__.'/InboxStorage.php';
 require_once __DIR__.'/../Items/ItemStorage.php';
+require_once __DIR__.'/../Friends/FriendsStorage.php';
 require_once __DIR__.'/../Matches/MatchStorage.php';
 
 /** Bounded source metadata only; opaque Match payloads and item catalogues are never loaded. */
@@ -40,15 +41,14 @@ class InboxSourceResolver
         };
         $friends=array_filter($entries,static function($e){return $e['kind']<2;});
         if($friends){
-            $rows=$this->rows("SELECT user_id AS id,JSON_OBJECT('revision',revision,'incoming',JSON_EXTRACT(incoming,'$'),'friends',JSON_EXTRACT(friends,'$'),'blocked',JSON_EXTRACT(blocked,'$')) AS data FROM friends_state WHERE user_id=?",[$user]);
-            $row=$rows[$user]??null;
-            if($row!==null){
+            $q=$this->pdo->prepare('SELECT revision,incoming,friends,blocked FROM friends_state WHERE user_id=?');$q->execute([$user]);$row=$q->fetch(PDO::FETCH_ASSOC);$q->closeCursor();
+            if($row!==false){
                 $incoming=[];$peers=[];$blocked=[];
-                foreach(self::members($row['incoming'])as$v)$incoming[self::uuid($v['requestId']??null)]=self::uuid($v['userId']??null);
-                foreach(self::members($row['friends'])as$v)$peers[self::uuid($v['userId']??null)]=true;
-                foreach(self::members($row['blocked'])as$v)$blocked[self::uuid($v['userId']??null)]=true;
+                foreach(FriendsStorage::field($row['incoming'],'incoming')as$v)$incoming[$v['requestId']]=$v['userId'];
+                foreach(FriendsStorage::field($row['friends'],'friends')as$v)$peers[$v['userId']]=true;
+                foreach(FriendsStorage::field($row['blocked'],'blocked')as$v)$blocked[$v['userId']]=true;
                 foreach($friends as$e){$peer=$e['kind']===0?($incoming[$e['sourceId']]??null):(isset($peers[$e['sourceId']])?$e['sourceId']:null);
-                    if($peer!==null&&!isset($blocked[$peer]))$put($e,$e['sourceId'],['userId'=>$peer],self::integer($row['revision']));}
+                    if($peer!==null&&!isset($blocked[$peer]))$put($e,$e['sourceId'],['userId'=>$peer],FriendsStorage::revision($row['revision']));}
             }
         }
         foreach(array_chunk(array_values(array_filter($entries,static function($e){return $e['kind']===2||$e['kind']===3;})),200)as$batch){
