@@ -3,6 +3,7 @@
 declare(strict_types=1);
 require_once __DIR__.'/../src/Core/Database.php';
 require_once __DIR__.'/../src/Achievements/AchievementService.php';
+require_once __DIR__.'/../src/Inbox/InboxService.php';
 
 class AchievementProbePDO extends PDO {
     public bool $loseCommit=false;
@@ -68,10 +69,10 @@ try{
     $content=['type'=>'fixture','textKey'=>'fixture','expiresAt'=>InboxRules::instant($now+InboxRules::RETENTION),'attachment'=>['values'=>[['key'=>'coins','amount'=>1]]]];
     for($i=0;$i<50;$i++)$inbox->deliver($user,$content,'capacity-'.$i,$now,'fixture');
     $original=$op();$reported=$service->report($user,$original,[['key'=>'kills','value'=>1]]);check(20,count($reported['newlyUnlocked']),'twenty unlocks commit despite full inbox');check(1,array_column($stats->get($user)['values'],null,'key')['kills']['value'],'stats still committed');
-    $pending=$service->get($user);check(20,count(array_filter($pending['progress'],static function($row){return $row['rewardState']==='pending';})),'all rewards durable pending');
+    $pending=$service->get($user);check(21,count(array_filter($pending['progress'],static function($row){return $row['rewardState']==='complete';})),'all unlocks complete atomically');
     check(1,$pending['progress'][0]['key']==='hidden'?1:0,'older guard preserved');
     $repeat=$service->report($user,$original,[['key'=>'kills','value'=>1]]);check(true,$repeat['replayed'],'statistics replay stays transaction-safe');check([],$repeat['newlyUnlocked'],'statistics replay has no duplicate unlocks');
-    $blocked=$service->deliver($user,['kill-0','kill-1']);check(['INBOX_FULL','INBOX_FULL'],array_column($blocked['results'],'code'),'bounded partial drain reports full');
+    $blocked=$service->deliver($user,['kill-0','kill-1']);check(['complete','complete'],array_column($blocked['results'],'state'),'compatibility status has no delivery');check(20,$values->get($user)['values'][0]['balance'],'all rewards credited despite full inbox');check(null,$pending['progress'][0]['unlockedAt'],'no permanent timestamp');
     // Later failure after the actual statistic write rolls both feature states back.
     if($dsn)$pdo->exec("CREATE TRIGGER achievement_failure BEFORE INSERT ON achievement_state FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='fixture rollback'");
     else $pdo->exec("CREATE TRIGGER achievement_failure BEFORE INSERT ON achievement_state BEGIN SELECT RAISE(ABORT,'fixture rollback'); END");
@@ -82,26 +83,21 @@ try{
     $scope=new SqlTransaction($pdo);$joined=new AchievementService($pdo,$clock,$scope);
     try{$scope->run(static function()use($joined,$rollback,$op){$joined->report($rollback,$op(),[['key'=>'kills','value'=>1]]);throw new RuntimeException('outer rollback');});}catch(RuntimeException $expected){}
     check(0,(int)$pdo->query("SELECT COUNT(*) FROM statistics_state WHERE user_id='$rollback'")->fetchColumn(),'explicit shared scope rolls stats back');check([],$service->get($rollback)['progress'],'explicit shared scope rolls unlocks back');check([],$inbox->get($rollback)['entries'],'no delivery before outer commit');
-    // Free capacity and deliver the original immutable amount after current catalog reward edits and31days.
-    $entry=$inbox->get($user)['entries'][0]['id'];$inbox->claim($user,$entry);$inbox->remove($user,$entry);
+    // Current definition edits cannot change or reissue an already committed reward.
     $rows[0]['rewards']['values'][0]['amount']=999;$service->configure($rows,3);$now+=31*86400000;
-    $delivered=$service->deliver($user,['kill-0','kill-1']);check('delivered',$delivered['results'][0]['state'],'old pending escrow delivered after expiry');check('pending',$delivered['results'][1]['state'],'next reward remains pending at capacity');
-    $rewardId=$delivered['results'][0]['inboxEntryId'];$message=null;foreach($inbox->get($user)['entries']as$row)if($row['id']===$rewardId)$message=$row;
-    check(1,$message['attachment']['values'][0]['amount'],'accepted original reward survives catalog edit');check(true,$message['overdue'],'overdue reward stays claimable');
-    $claimed=$inbox->claim($user,$rewardId);check(2,$claimed['playerValues']['values'][0]['balance'],'actual original grant credited only on claim');check('delivered',$service->get($user)['progress'][1]['rewardState'],'pending transition persisted');
+    $delivered=$service->deliver($user,['kill-0','kill-1']);check(['complete','complete'],array_column($delivered['results'],'state'),'compatibility query after expiry');
+    check(20,$values->get($user)['values'][0]['balance'],'definition edit cannot reissue reward');
     $pdo->loseCommit=true;reject('STATE_CONFLICT',static function()use($service,$uncertain){$service->unlock($uncertain,'manual');});
-    check('pending',$service->get($uncertain)['progress'][0]['rewardState'],'lost commit keeps permanent pending guard');
-    $recovered=$service->unlock($uncertain,'manual');check(true,$recovered['replayed'],'uncertain unlock safely repeats');check(1,count($inbox->get($uncertain)['entries']),'uncertain handoff produces one Inbox entry');
+    check('complete',$service->get($uncertain)['progress'][0]['rewardState'],'lost commit keeps permanent bit');
+    $recovered=$service->unlock($uncertain,'manual');check(true,$recovered['replayed'],'uncertain unlock safely repeats');check([],$inbox->get($uncertain)['entries'],'no Inbox copy');
+    check(2,$values->get($uncertain)['values'][0]['balance'],'uncertain commit exactly once');
     $scope->run(static function()use($joined,$other){$joined->unlock($other,'manual');});
-    check('pending',$service->get($other)['progress'][0]['rewardState'],'external source commits before delivery');
-    $pdo->loseCommit=true;$unknownHandoff=$service->deliver($other,['manual']);
-    check('delivered',$unknownHandoff['results'][0]['state'],'lost handoff acknowledgement confirms atomic committed source');
-    check(1,count($inbox->get($other)['entries']),'uncertain handoff has one original Inbox entry');
-    $service->deliver($other,['manual']);check(1,count($inbox->get($other)['entries']),'repeated delivery after uncertain commit never duplicates');
+    check('complete',$service->get($other)['progress'][0]['rewardState'],'outer source commits bit and credit');
+    $service->deliver($other,['manual']);check(2,$values->get($other)['values'][0]['balance'],'status does not grant again');
     // Real independent processes: duplicate manual unlock and handoff never duplicate source/reward.
     $jobs=[];for($i=0;$i<4;$i++){$pipes=[];$p=proc_open([PHP_BINARY,__FILE__,'--unlock',$target,$parallel,'manual',(string)$now],[0=>['pipe','r'],1=>['pipe','w'],2=>['pipe','w']],$pipes);if(!is_resource($p))throw new RuntimeException('Worker failed');fclose($pipes[0]);$jobs[]=[$p,$pipes];}
     $wins=0;foreach($jobs as[$p,$pipes]){$reply=stream_get_contents($pipes[1]);$error=stream_get_contents($pipes[2]);fclose($pipes[1]);fclose($pipes[2]);check(0,proc_close($p),'unlock worker');if($error!=='')throw new RuntimeException($error);$r=json_decode($reply,true,512,JSON_THROW_ON_ERROR);if(isset($r['code']))check('STATE_CONFLICT',$r['code'],'safe collision');elseif(!$r['replayed'])$wins++;}
-    check(1,$wins,'one first concurrent unlock');check(1,count($service->get($parallel)['progress']),'permanent once per key');check(1,count($inbox->get($parallel)['entries']),'one atomic Inbox handoff');
+    check(1,$wins,'one first concurrent unlock');check(1,count($service->get($parallel)['progress']),'permanent once per key');check(0,count($inbox->get($parallel)['entries']),'no redundant Inbox handoff');check(2,$values->get($parallel)['values'][0]['balance'],'one concurrent credit');
     foreach([[],array_fill(0,9,'manual'),['manual','manual'],[1]]as$bad)reject('INVALID_REQUEST',static function()use($service,$user,$bad){$service->deliver($user,$bad);});
     // Reserve every lifetime key, archive metadata, then reject a501st identity without forgetting guards.
     $catalog=json_decode($pdo->query('SELECT data FROM achievement_catalog WHERE id=1')->fetchColumn(),true);$catalog['definitions']=[];
