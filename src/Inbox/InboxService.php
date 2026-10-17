@@ -5,6 +5,7 @@ require_once __DIR__.'/InboxRules.php';
 require_once __DIR__.'/InboxStorage.php';
 require_once __DIR__.'/InboxLimits.php';
 require_once __DIR__.'/InboxSourceResolver.php';
+require_once __DIR__.'/InboxLegacyRewards.php';
 require_once __DIR__.'/../Core/SqlTransaction.php';
 require_once __DIR__.'/../PlayerValues/PlayerValuesService.php';
 
@@ -46,7 +47,7 @@ class InboxService
     public static function earliestExpiry(array $state,array $catalog): ?int {
         $times=[];foreach($state['sourceEntries']as$e)if($e['kind']!==7||$e['claimed'])$times[]=$e['expiresAtMillis'];
         foreach($state['freeTextEntries']as$e)$times[]=$e['expiresAtMillis'];
-        foreach($state['entries']as$e)if(!InboxRules::valuable($e))$times[]=InboxRules::millis($e['content']['expiresAt']);
+        foreach($state['entries']as$e)if(!InboxRules::valuable($e)||$e['claimed'])$times[]=InboxRules::millis($e['content']['expiresAt']);
         $ids=array_fill_keys(array_column(array_merge($state['ordinaryMarkers'],$state['markers']),'id'),true);
         foreach($catalog['entries']as$e)if(isset($ids[$e['id']])&&!InboxRules::valuable($e))$times[]=InboxRules::millis($e['content']['expiresAt']);
         return $times?min($times):null;
@@ -83,9 +84,14 @@ class InboxService
         }
         usort($entries,static function($a,$b){return strcmp($b['createdAt'],$a['createdAt'])?:strcmp($a['id'],$b['id']);});return $entries;
     }
+    private static function guard(array $state,array $entry): array {
+        $state['legacyClaims']=array_values(array_filter($state['legacyClaims'],static function($g)use($entry){return $g['id']!==$entry['id'];}));
+        $state['legacyClaims'][]=['id'=>$entry['id'],'sourceOperationId'=>$entry['sourceOperationId']];return $state;
+    }
     private function prune(string $user,array $state,array $catalog,int $now): array {
-        // Finite legacy valuable originals stay until source migration proves and settles them.
-        $state['entries']=array_values(array_filter($state['entries'],static function($e)use($now){return InboxRules::valuable($e)||InboxRules::retained($e,$now);}));
+        // Only consumed originals may compact to a small source guard; open valuable payloads remain intact.
+        foreach($state['entries']as$e)if(!InboxRules::retained($e,$now)&&$e['claimed']&&InboxRules::valuable($e)){self::storedOriginal($state,$catalog,$e['id']);$state=self::guard($state,$e);}
+        $state['entries']=array_values(array_filter($state['entries'],static function($e)use($now){return InboxRules::retained($e,$now);}));
         $candidates=array_values(array_filter($state['sourceEntries'],static function($e)use($now){return self::sourceRetained($e,$now);}));$resolved=$this->sources->resolve($user,$candidates);
         $state['sourceEntries']=array_values(array_filter($candidates,static function($e)use($resolved,$user){return isset($resolved[InboxStorage::sourceId($e,$user)]);}));
         $state['freeTextEntries']=array_values(array_filter($state['freeTextEntries'],static function($e)use($now){return $e['expiresAtMillis']>$now;}));
@@ -119,7 +125,7 @@ class InboxService
             if($found['kind']==='broadcast')$next=self::mark($next,$catalog,$entry,$found['claimed'],$remove);
             else {
                 foreach(['entries','sourceEntries','freeTextEntries']as$key){$kept=[];foreach($next[$key]as$e){$id=$key==='entries'?$e['id']:($key==='sourceEntries'?InboxStorage::sourceId($e,$user):'message:'.$e['id']);
-                    if($id===$entry){if($remove){if($key==='entries'&&InboxRules::valuable($e))$next['legacyClaims'][]=$e;continue;}$e['read']=true;}$kept[]=$e;}$next[$key]=$kept;}
+                    if($id===$entry){if($remove){if($key==='entries'&&InboxRules::valuable($e))$next=self::guard($next,$e);continue;}$e['read']=true;}$kept[]=$e;}$next[$key]=$kept;}
             }
             $next=self::bump($next);$this->save($user,$next,$catalog);return $this->view($player,$next,$catalog,$now);
         });
@@ -140,7 +146,7 @@ class InboxService
             $player=$this->player($user,true);$catalog=$this->catalog(1);$state=$this->state($user,true);$now=($this->clock)();$found=null;
             foreach($this->entries($player,$state,$catalog,$now)as$e)if($e['id']===$entry)$found=$e;
             if($found===null){
-                foreach(array_merge($state['entries'],$state['legacyClaims'])as$e)if(($e['id']??null)===$entry&&($e['claimed']??false)&&isset($e['content'])&&InboxRules::valuable($e))$found=InboxRules::viewEntry($e,$now);
+                foreach($state['entries']as$e)if(($e['id']??null)===$entry&&($e['claimed']??false)&&isset($e['content'])&&InboxRules::valuable($e))$found=InboxRules::viewEntry($e,$now);
                 foreach($catalog['entries']as$e)if($e['id']===$entry&&InboxRules::valuable($e)){$m=self::marker($state,$catalog,$entry);if($m['claimed']&&!$m['removed'])$found=InboxRules::viewEntry($e,$now,$m);}
                 if($found===null){$reference=$this->sources->claimedReturn($user,$entry);if($reference!==null)return ['entryId'=>$entry,'replayed'=>true,'inbox'=>$this->view($player,$state,$catalog,$now),'playerValues'=>$this->values->get($user),'items'=>[$reference]];}
             }
@@ -148,6 +154,9 @@ class InboxService
             self::storedOriginal($state,$catalog,$entry);
             if(!InboxRules::attachmentValuable($found['attachment']))InboxRules::fail('NO_ATTACHMENT','This entry has no reward',422);
             $return=$found['attachment']['itemReturn']??null;$references=$return===null?[]:[['instanceId'=>$return['instanceId'],'itemKey'=>$return['itemKey']]];
+            $old=false;foreach($state['entries']as$e)if($e['id']===$entry)$old=true;foreach($catalog['entries']as$e)if($e['id']===$entry&&$e['sourceOperationId']!==null)$old=true;
+            $bridge=$old&&$return===null?new InboxLegacyRewards($this->pdo,$this->clock,$this->transactions):null;
+            if($bridge!==null){$applied=$bridge->wasApplied($user,$entry,$found['attachment']['values']);if(!$found['claimed']&&$applied)InboxStorage::required();if($found['claimed']&&$applied)$bridge->acknowledge($user,$entry,$found['attachment']['values']);}
             if($found['claimed'])return ['entryId'=>$entry,'replayed'=>true,'inbox'=>$this->view($player,$state,$catalog,$now),'playerValues'=>$this->values->get($user),'items'=>$references];
             self::writable($state);$next=$this->prune($user,$state,$catalog,$now);
             if($found['kind']==='broadcast')$next=self::mark($next,$catalog,$entry,true,false);

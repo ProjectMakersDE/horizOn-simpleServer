@@ -53,6 +53,11 @@ try{
  same([],$afterPv['receipts'],'only proven receipt removed');same($now,$afterPv['evictedThroughMillis'],'old acceptance floor closes');same($beforePv['revision']+1,$afterPv['revision'],'guard migration advances values revision');
  foreach(['values','day','today','adjustedToday','initializedKeys']as$field)same($beforePv[$field],$afterPv[$field],'source guard migration preserves '.$field);
  fails('OPERATION_EXPIRED',static function()use($values,$oldClaim,$amounts,$operation,$now){$values->grant($oldClaim,$amounts,$operation,$now,$operation);});same(3,$values->get($oldClaim)['values'][0]['balance'],'old standalone receipt cannot reopen');
+ // A consumed original can lose its expired rich body without losing the exact source handoff proof.
+ $removed=$user();$record=$delivered($removed,true);$inbox->remove($removed,$record['inboxEntryId']);
+ $q=$pdo->prepare('SELECT data FROM inbox_state WHERE user_id=?');$q->execute([$removed]);$guarded=InboxStorage::state($q->fetchColumn());
+ same([],$guarded['entries'],'removed consumed payload is not a permanent copy');same(['id','sourceOperationId'],array_keys($guarded['legacyClaims'][0]),'two-field finite consumed guard');
+ same(true,$migration->player($removed),'exact removed source settles as replay only');same(3,$values->get($removed)['values'][0]['balance'],'removed source never regrants');
  $missing=$user();$r=$old('old','delivered');$r['inboxEntryId']='message:'.Database::uuid();$seed($missing,[$r]);$before=$raw($missing);
  fails('MIGRATION_REQUIRED',static function()use($migration,$missing){$migration->player($missing);});same($before,$raw($missing),'missing proof preserves source');
  $unknown=$user();$r=$old('old');$r['unexplained']='preserve';$seed($unknown,[$r]);$before=$raw($unknown);

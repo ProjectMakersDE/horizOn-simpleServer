@@ -77,6 +77,7 @@ $command('transfer',$actor,$token,['targetUserId' => $peer]); $left = $command('
 require_once __DIR__ . '/../src/Core/Database.php'; require_once __DIR__ . '/../src/Inbox/InboxService.php';
 $pdo = new PDO('sqlite:' . __DIR__ . '/../data/test_horizon_integration.db',null,null,[PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
 $inbox = new InboxService($pdo); $now = Database::nowMillis(); $content = ['type' => 'fixture','textKey' => 'fixture','expiresAt' => InboxRules::instant($now + InboxRules::RETENTION)];
+$prune=$inbox->freeText($third,Database::uuid(),$inbox->get($third)['revision'],$now,$now+60000,'fixture cleanup');$inbox->remove($third,$prune['entryId']);
 fillInboxFixture($pdo,$third,$now); $pdo = null;
 [$status,$failure] = api('POST','/groups/' . $fullId . '/accept-request',['userId' => $actor,'expectedRevision' => $requested['group']['revision'],'targetUserId' => $third,'requestId' => $request],$token); check(409,$status,'Full Inbox refuses group action'); check('INBOX_FULL',$failure['code'],'Full Inbox code');
 [, $unchanged] = api('GET','/groups/' . $fullId . '/pending?userId=' . $actor,null,$token); check($request,$unchanged['joinRequests'][0]['requestId'],'Full Inbox retains original pending');
