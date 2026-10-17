@@ -1091,20 +1091,58 @@ numeric deltas. Current bounds apply to the exact result; a new template propert
 never silently appears on an old instance. Archived templates prevent new grants
 and property changes, while equip/unequip/discard remain available.
 
-One installation is one project. Fixed self-hosted bounds are5000 lifetime catalog
-keys,150 inventory instances and50 retained grant receipts. Stored items and keys
-survive lower service limits; only additions are refused. This is not a shared
-hosted-cluster capacity or throughput claim.
+One installation is one project. Operator variables `ITEMS_CATALOG` (default5000),
+`ITEMS_INVENTORY` (150) and `ITEMS_LEGACY_RECEIPTS` (50) are adjustable above those
+defaults. Existing items and catalogues remain readable after a reduction, while
+new additions above the limit fail. The stable UInt16 template format has an actual
+65536-lifetime-identity bound, reported explicitly. These defaults are not shared
+hosted-cluster capacity or throughput measurements.
 
 A Player Values offer gains `itemRewards:[{itemKey,quantity}]`, absent meaning `[]`.
 Costs stay positive; at least one value reward or item reward is required. Unique
 item keys have quantity1..4 and total at most4. Purchase uses its original
-`unixMillis:UUID` operation ID. Debit, daily counters, the value guard and item
+`unixMillis:UUID` operation ID. Debit, the source-owned value guard and item
 grant share one explicit `SqlTransaction` and PDO; full/invalid inventory rolls
 everything back. Value-only offers issue no item SQL. The first successful purchase
 returns `items:[{instanceId,itemKey}]`. A replay returns empty `applied` and `items`,
 checks the retained PV guard before current offers/catalog and never recreates an
 already discarded item. Explicitly refresh inventory after confirmed purchase.
+
+Storage keeps each immutable template basis once. An instance stores16 UUID bytes,
+8 basis-version bytes,8 creation-time bytes,1 flags byte and1 delta-count byte.
+Each actually changed numeric property adds its1-byte slot and8-byte integer.
+The raw instance is34 bytes with no changes and52 bytes with two changes. SQL uses
+Base64 within JSON, so those raw figures are not physical SQL disk usage. Public
+responses still contain the complete original properties and creation date.
+Template rules use25 bytes each before Base64. Bases, indexes and old versions are
+shared project costs and must be counted separately.
+
+Source-owned Player Values purchases keep no second item receipt. They require the
+same explicit SQL transaction and durable source guard, including after a lost
+response or discarded item. Marketplace escrow stores that same compact original
+and moves basis reference counts with ownership in the transaction. Catalog edits
+never replace an old item's original string/type/base state.
+
+Existing full inventories stay readable. Changing them requires explicit cold
+conversion. Stop **all writers** and verify a restorable backup first. These flags
+record that preparation; they do not perform a backup or stop the app:
+
+```bash
+php bin/items.php compact-inspect templates - 20
+php bin/items.php compact-apply templates - 20 --writes-stopped --backup-verified
+php bin/items.php compact-apply inventory - 20 --writes-stopped --backup-verified
+php bin/items.php compact-apply escrow - 20 --writes-stopped --backup-verified
+php bin/items.php collect-basis ORIGINAL_VERSION --writes-stopped --backup-verified
+```
+
+Follow each returned cursor until `complete:true`. Conversion validates the original
+schema, preserves old property values and receipts, and commits each owner atomically.
+Unknown fields stop conversion unchanged. No login/startup migration scans run.
+`collect-basis` is cold maintenance. It checks the current template and scans all
+owners in50-row pages to prove the version unused before deleting it. This also
+handles conservative counts left by an operator's direct SQL user deletion. It is
+not a request-path cleanup or an inexpensive constant-time operation. Used versions
+stay intact. Do not run it alongside writers.
 
 The server-only ItemService grant provider hashes original source, timestamp and
 key/quantity intent, not mutable template properties. Retained receipts precede
@@ -1122,9 +1160,10 @@ application credentials or a default host database. Isolated MySQL/PHP7.4 eviden
 is recorded separately from local PHP and CI.
 
 Service SQL counts exclude authentication and bootstrap. Inventory GET uses2
-SELECTs; a catalog page uses4 around at most51 indexed templates. Adjust uses3
-SELECTs plus1 inventory CAS, equip/discard2 plus1 CAS. A one-template paid item
-purchase uses7 SELECTs and2 DML statements inside one transaction. Direct grant
+SELECTs; a nonempty catalog page uses5 around at most51 indexed templates and a basis batch.
+Adjust uses5 SELECTs plus1 inventory CAS, equip/discard3 plus1 CAS. A one-template
+paid item purchase uses8 SELECTs and3 DML statements including the basis reference
+count inside one transaction. Larger distinct basis sets hydrate in128-entry batches. Direct grant
 uses2 plus at most4 template reads and1 inventory CAS. SQLite adds BEGIN/COMMIT;
 MySQL PDO transaction-method calls are outside the SQL-text counters. These are
 statement counts, not hosted latency or measured maximum capacity.

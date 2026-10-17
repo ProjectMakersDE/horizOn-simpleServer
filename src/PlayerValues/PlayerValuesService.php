@@ -174,7 +174,7 @@ class PlayerValuesService
                 $items = [];
                 if (!empty($offer['itemRewards'])) {
                     $provider = new ItemService($this->pdo, $this->clock, $this->transactions);
-                    $grant = $provider->grant($userId, $offer['itemRewards'], $operationId, PlayerValuesLedger::issuedAt($operationId), 'offer:' . $offerKey);
+                    $grant = $provider->grantFromSource($userId, $offer['itemRewards'], $operationId, PlayerValuesLedger::issuedAt($operationId), 'offer:' . $offerKey);
                     $items = $grant['items'];
                 }
                 return [$next, $applied, $items];

@@ -3,18 +3,20 @@
 declare(strict_types=1);
 require_once __DIR__ . '/ItemStore.php';
 require_once __DIR__ . '/../Core/Database.php';
+require_once __DIR__ . '/../Core/Config.php';
 require_once __DIR__ . '/../Core/SqlTransaction.php';
 
 /** Connection-bound grant provider and explicit inventory CAS; no public grant endpoint. */
 class ItemService
 {
     private PDO $pdo; private ItemStore $store; private SqlTransaction $transactions; private $clock; private array $limits;
-    public function __construct(PDO $pdo,?callable $clock=null,?SqlTransaction $transactions=null,int $catalog=5000,int $inventory=150,int $receipts=50)
+    public function __construct(PDO $pdo,?callable $clock=null,?SqlTransaction $transactions=null,?int $catalog=null,?int $inventory=null,?int $receipts=null)
     {
         $this->pdo=$pdo; $this->store=new ItemStore($pdo); $this->transactions=$transactions ?? new SqlTransaction($pdo);
         if (!$this->transactions->owns($pdo)) throw new InvalidArgumentException('Transaction scope belongs to another connection');
         $this->clock=$clock ?? static function () { return Database::nowMillis(); };
-        $this->limits=['catalog'=>max(1,min(5000,$catalog)),'inventory'=>max(1,min(150,$inventory)),'receipts'=>max(1,min(50,$receipts))];
+        $this->limits=['catalog'=>$catalog??Config::operatorLimit('ITEMS_CATALOG',5000,ItemStorage::SLOTS),'inventory'=>$inventory??Config::operatorLimit('ITEMS_INVENTORY',150),'receipts'=>$receipts??Config::operatorLimit('ITEMS_LEGACY_RECEIPTS',50)];
+        foreach($this->limits as $name=>$value)if($value<1||$value>($name==='catalog'?ItemStorage::SLOTS:2147483647))throw new InvalidArgumentException('Invalid item limit: '.$name);
         if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME)==='sqlite') $pdo->exec('PRAGMA busy_timeout=5000');
     }
     private function atomic(callable $work)
@@ -64,7 +66,7 @@ class ItemService
         return ['instanceId'=>$original['instanceId'],'itemKey'=>$original['itemKey']];
     }
     private function view(string $user,array $state): array
-    { return ['userId'=>$user,'revision'=>$state['revision'],'instances'=>array_values($state['instances']),'limits'=>$this->limits,'serverTime'=>PlayerValuesLedger::instant(($this->clock)())]; }
+    { return ['userId'=>$user,'revision'=>$state['revision'],'instances'=>array_map([ItemStorage::class,'wire'],array_values($state['instances'])),'limits'=>$this->limits,'serverTime'=>PlayerValuesLedger::instant(($this->clock)())]; }
     public function get(string $user): array
     { $user=ItemRules::uuid($user); $this->store->player($user); return $this->view($user,$this->store->inventory($user)); }
     public function inspect(string $user): array
@@ -86,7 +88,7 @@ class ItemService
         return $this->atomic(function () use ($key,$expected,$definition) {
             $header=$this->store->header(true); if ($header['revision']!==$expected) ItemRules::fail('REVISION_CONFLICT'); $previous=$this->store->template($key,true);
             if ($previous===null && $header['total'] >= $this->limits['catalog']) ItemRules::fail('ITEM_CATALOG_LIMIT_REACHED',422);
-            if ($previous===null || ItemRules::canonical((object)$previous)!==ItemRules::canonical((object)$definition)) {
+            if ($previous===null || ItemRules::canonical((object)ItemStore::definitionWire($previous))!==ItemRules::canonical((object)$definition)) {
                 $next=['revision'=>ItemRules::next($header['revision']),'total'=>$header['total']+($previous===null ? 1 : 0)];
                 $this->store->saveHeader($header,$next); $this->store->saveTemplate($definition); $header=$next;
             }
@@ -118,6 +120,27 @@ class ItemService
             $this->store->saveInventory($user,$state,$next,false); return $this->view($user,$next);
         });
     }
+    /** Only the durable source may guard a new grant, in this same explicit SQL scope. */
+    public function grantFromSource(string $user,$items,string $operation,int $issued,string $source):array
+    {
+        if(!$this->transactions->isRunning())throw new LogicException('Source-owned item grant requires the owning SQL scope');
+        $user=ItemRules::uuid($user);$items=ItemRules::rewards($items);ItemRules::integer($issued);
+        PlayerValuesLedger::text($operation,128,'operationId');PlayerValuesLedger::text($source,200,'source');
+        return $this->atomic(function()use($user,$items){
+            $this->store->player($user,true);$state=$this->store->inventory($user,true);
+            if(!($state['compact']??false))ItemStorage::required();
+            if(count($state['instances'])+array_sum(array_column($items,'quantity'))>$this->limits['inventory'])ItemRules::fail('INVENTORY_FULL',422);
+            $next=$state;$references=[];$now=($this->clock)();
+            foreach($items as $item){
+                $template=$this->store->template($item['itemKey'],true);if($template===null||!$template['active'])ItemRules::fail('ITEM_TEMPLATE_NOT_FOUND',404);
+                if(!isset($template['_basis']))ItemStorage::required();
+                for($i=0;$i<$item['quantity'];$i++){$id=Database::uuid();$references[]=['instanceId'=>$id,'itemKey'=>$item['itemKey']];
+                    $next['instances'][]=['instanceId'=>$id,'itemKey'=>$item['itemKey'],'properties'=>clone $template['baseProperties'],'equipped'=>false,'createdAt'=>PlayerValuesLedger::instant($now),'_basis'=>$template['_basis']];}
+            }
+            $next['revision']=ItemRules::next($state['revision']);$this->store->saveInventory($user,$state,$next,true);
+            return ['items'=>$references,'replayed'=>false];
+        });
+    }
     /** Original timestamp/provenance are persisted by the caller before this server-only grant. */
     public function grant(string $user,$items,string $operation,int $issued,string $source): array
     {
@@ -135,9 +158,10 @@ class ItemService
             $next=$state; $references=[];
             foreach ($items as $item) {
                 $template=$this->store->template($item['itemKey'],true); if ($template===null || !$template['active']) ItemRules::fail('ITEM_TEMPLATE_NOT_FOUND',404);
+                if(!isset($template['_basis']))ItemStorage::required();
                 for ($i=0;$i<$item['quantity'];$i++) {
                     $id=Database::uuid(); $references[]=['instanceId'=>$id,'itemKey'=>$item['itemKey']];
-                    $next['instances'][]=['instanceId'=>$id,'itemKey'=>$item['itemKey'],'properties'=>clone $template['baseProperties'],'equipped'=>false,'createdAt'=>PlayerValuesLedger::instant($now)];
+                    $next['instances'][]=['instanceId'=>$id,'itemKey'=>$item['itemKey'],'properties'=>clone $template['baseProperties'],'equipped'=>false,'createdAt'=>PlayerValuesLedger::instant($now),'_basis'=>$template['_basis']??null];
                 }
             }
             $all=array_merge($state['receipts'],[['operationId'=>$operation,'payloadHash'=>$hash,'source'=>$source,'issuedAt'=>PlayerValuesLedger::instant($issued),

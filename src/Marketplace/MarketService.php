@@ -45,7 +45,7 @@ class MarketService
     private function visible(array $v,?string $user): bool
     { return $user===null||($v['status']==='active'&&$v['expiresAt']>$this->now())||in_array($user,[$v['sellerId'],$v['buyerId'],$v['returnOwnerId']],true); }
     private function view(array $v): array
-    { $r=array_intersect_key($v,array_flip(['id','revision','sellerId','buyerId','returnOwnerId','item','itemReference','currencyKey','price','feeBps','feeAmount','sellerNet','status','createdAt','expiresAt','terminalAt','returnEntryId','ownerUnavailable']));foreach(['createdAt','expiresAt','terminalAt']as$k)$r[$k]=MarketRules::instant($r[$k]);return$r; }
+    { $r=array_intersect_key($v,array_flip(['id','revision','sellerId','buyerId','returnOwnerId','item','itemReference','currencyKey','price','feeBps','feeAmount','sellerNet','status','createdAt','expiresAt','terminalAt','returnEntryId','ownerUnavailable']));if($r['item']!==null)$r['item']=ItemStorage::wire($r['item']);foreach(['createdAt','expiresAt','terminalAt']as$k)$r[$k]=MarketRules::instant($r[$k]);return$r; }
     private function envelope(array $receipt,bool $replayed,?array $v=null): array
     { $v=$v??$this->store->get($receipt['listingId']);if($v!==null&&$v['terminalAt']!==null&&$v['terminalAt']+MarketRules::TERMINAL<=$this->now())$v=null;return['receipt'=>$receipt,'listing'=>$v===null?null:$this->view($v),'replayed'=>$replayed,'serverTime'=>MarketRules::instant($this->now())]; }
     private function configView(array $h,bool $public=false): array
