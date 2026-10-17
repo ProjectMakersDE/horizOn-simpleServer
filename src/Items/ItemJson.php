@@ -12,7 +12,8 @@ class ItemJson
         try { $value=json_decode($json,false,32,JSON_THROW_ON_ERROR); }
         catch (JsonException $error) { ItemRules::invalid(); }
         if (!$value instanceof stdClass) ItemRules::invalid();
-        preg_match_all('/"(?:[^"\\\\]|\\\\.)*"|[{}\[\]:,]|true|false|null|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/s',$json,$matches);
+        $count=preg_match_all('/"(?:[^"\\\\]++|\\\\.)*+"|[{}\[\]:,]|true|false|null|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/s',$json,$matches);
+        if ($count===false) ItemRules::invalid();
         $tokens=$matches[0]; $stack=[];
         foreach ($tokens as $index=>$token) {
             if ($token==='{') $stack[]=[];
