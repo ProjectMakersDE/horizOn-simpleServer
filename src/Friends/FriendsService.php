@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 require_once __DIR__ . '/FriendsRules.php';
+require_once __DIR__ . '/FriendsLimits.php';
 require_once __DIR__ . '/../Inbox/InboxService.php';
 require_once __DIR__ . '/../PlayerProfile/PublicPlayerDisplayService.php';
 
@@ -20,14 +21,17 @@ class FriendsService implements FriendsBlockPolicy
     private PublicPlayerDisplayService $profiles;
     private $clock;
     private int $maxFriends;
-    public function __construct(PDO $pdo, ?callable $clock = null, ?SqlTransaction $transactions = null, int $maxFriends = FriendsRules::FRIENDS)
+    private array $limits;
+    public function __construct(PDO $pdo, ?callable $clock = null, ?SqlTransaction $transactions = null, ?int $maxFriends = null, ?array $limits = null)
     {
-        if ($maxFriends < 1 || $maxFriends > FriendsRules::FRIENDS) throw new InvalidArgumentException('Invalid friend bound');
+        $this->limits = $limits ?? FriendsLimits::values();
+        if ($maxFriends !== null) $this->limits['maxFriends'] = $maxFriends;
+        $this->limits = FriendsLimits::validate($this->limits);
         $this->pdo = $pdo; $this->mysql = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql';
         $this->transactions = $transactions ?? new SqlTransaction($pdo);
         if (!$this->transactions->owns($pdo)) throw new InvalidArgumentException('Foreign transaction connection');
         $this->clock = $clock ?? static function () { return Database::nowMillis(); };
-        $this->maxFriends = $maxFriends;
+        $this->maxFriends = $this->limits['maxFriends'];
         $this->inbox = new InboxService($pdo, $this->clock, $this->transactions);
         $this->profiles = new PublicPlayerDisplayService($pdo);
         if (!$this->mysql) $pdo->exec('PRAGMA busy_timeout=5000');
@@ -42,6 +46,11 @@ class FriendsService implements FriendsBlockPolicy
             throw $error;
         }
     }
+    private function requireWriteScope(): void
+    {
+        if($this->pdo->inTransaction()&&!$this->transactions->isRunning())
+            FriendsRules::fail('STATE_CONFLICT','Mutations require the caller to share this explicit SqlTransaction scope');
+    }
     /** Sorted row locks fence concurrent user removal without copying private account fields. */
     private function players(array $ids, bool $lock = false): array
     {
@@ -54,9 +63,7 @@ class FriendsService implements FriendsBlockPolicy
         $query = $this->pdo->prepare('SELECT revision,active_user_id,friends,incoming,outgoing,blocked FROM friends_state WHERE user_id=?' . ($lock && $this->mysql ? ' FOR UPDATE' : ''));
         $query->execute([$user]); $row = $query->fetch();
         if ($row === false) return FriendsRules::emptyState();
-        $state = ['revision' => (int)$row['revision']];
-        foreach (['friends', 'incoming', 'outgoing', 'blocked'] as $key) $state[$key] = json_decode($row[$key], true, 512, JSON_THROW_ON_ERROR);
-        $state['exists'] = true; return $state;
+        return FriendsStorage::state($row,$user);
     }
     private function save(string $user, array $before, array $after): array
     {
@@ -64,27 +71,48 @@ class FriendsService implements FriendsBlockPolicy
         if ($before['revision'] >= FriendsRules::MAX) FriendsRules::fail('STATE_CONFLICT', 'Relationship revision exhausted');
         $after['revision'] = $before['revision'] + 1;
         $data = [$after['revision']];
-        foreach (['friends', 'incoming', 'outgoing', 'blocked'] as $field) $data[] = InboxRules::json($after[$field]);
+        foreach (FriendsStorage::FIELDS as $field) {
+            $encoded = ($before['_legacy']??false)?InboxRules::json($after[$field]):FriendsStorage::encode($after[$field],$field);
+            $oldEncoded = ($before['_legacy']??false)?InboxRules::json($before[$field]):FriendsStorage::encode($before[$field],$field);
+            if (strlen($encoded)>FriendsStorage::FIELD_BYTES && ($this->mysql || strlen($encoded)>strlen($oldEncoded)))
+                FriendsRules::fail('STATE_CONFLICT','Relationship exceeds portable SQL TEXT frame');
+            $data[] = $encoded;
+        }
         if ($before['exists']) {
             $query = $this->pdo->prepare('UPDATE friends_state SET revision=?,friends=?,incoming=?,outgoing=?,blocked=? WHERE user_id=? AND revision=?');
             $query->execute(array_merge($data, [$user, $before['revision']]));
             if ($query->rowCount() !== 1) FriendsRules::conflict();
         } else $this->pdo->prepare('INSERT INTO friends_state(revision,friends,incoming,outgoing,blocked,user_id,active_user_id) VALUES(?,?,?,?,?,?,?)')->execute(array_merge($data, [$user, $user]));
-        $this->pdo->prepare('DELETE FROM friends_references WHERE owner_user_id=?')->execute([$user]);
-        $references = [];
-        foreach (['friends', 'incoming', 'outgoing', 'blocked'] as $field) foreach ($after[$field] as $entry) $references[$entry['userId']] = true;
-        if (count($references) > 340) FriendsRules::fail('STATE_CONFLICT', 'Relationship reference bound exceeded');
-        if ($references) {
-            $args = []; foreach (array_keys($references) as $id) { $args[] = $user; $args[] = $id; }
-            $this->pdo->prepare('INSERT INTO friends_references(owner_user_id,related_user_id) VALUES ' . implode(',', array_fill(0, count($references), '(?,?)')))->execute($args);
+        $this->references($user,$before,$after);
+        $after['exists'] = true;
+        // Legacy mutations retain their union index until an explicit bilateral cold proof permits removal.
+        if (!($before['_legacy']??false)) foreach (FriendsStorage::FIELDS as $field) $after[$field]=FriendsStorage::field(FriendsStorage::encode($after[$field],$field),$field);
+        return $after;
+    }
+    /** Only reverse blocks need an index; bilateral edges are their own deletion retry anchor. */
+    private function references(string $user,array $before,array $after): void
+    {
+        $old=FriendsStorage::references($before,$before['_legacy']??false);$new=FriendsStorage::references($after,$after['_legacy']??false);
+        if ($before['_legacy']??false) {
+            $q=$this->pdo->prepare('SELECT related_user_id FROM friends_references WHERE owner_user_id=? ORDER BY related_user_id');$q->execute([$user]);
+            $actual=$q->fetchAll(PDO::FETCH_COLUMN);$q->closeCursor();
+            if ($actual!==$old) FriendsStorage::required();
         }
-        $after['exists'] = true; return $after;
+        foreach (array_chunk(array_values(array_diff($old,$new)),200) as $batch) {
+            $q=$this->pdo->prepare('DELETE FROM friends_references WHERE owner_user_id=? AND related_user_id IN ('.implode(',',array_fill(0,count($batch),'?')).')');$q->execute(array_merge([$user],$batch));
+            if ($q->rowCount()!==count($batch)) FriendsStorage::required();
+        }
+        foreach (array_chunk(array_values(array_diff($new,$old)),200) as $batch) {
+            $args=[];foreach($batch as $id){$args[]=$user;$args[]=$id;}
+            $this->pdo->prepare('INSERT INTO friends_references(owner_user_id,related_user_id) VALUES '.implode(',',array_fill(0,count($batch),'(?,?)')))->execute($args);
+        }
     }
     private function anchor(string $user): void
     {
-        $this->pdo->prepare("INSERT INTO friends_state(user_id,active_user_id,revision,friends,incoming,outgoing,blocked) VALUES(?,?,0,'[]','[]','[]','[]')")->execute([$user, $user]);
+        $empty=FriendsStorage::encode([],'friends');
+        $this->pdo->prepare('INSERT INTO friends_state(user_id,active_user_id,revision,friends,incoming,outgoing,blocked) VALUES(?,?,0,?,?,?,?)')->execute([$user,$user,$empty,$empty,$empty,$empty]);
     }
-    public function limits(): array { return ['maxFriends' => $this->maxFriends, 'maxIncomingRequests' => 20, 'maxOutgoingRequests' => 20, 'maxBlocked' => 100]; }
+    public function limits(): array { return $this->limits; }
     public function get(string $user): array
     {
         $user = FriendsRules::uuid($user);
@@ -120,7 +148,7 @@ class FriendsService implements FriendsBlockPolicy
     {
         $query = $this->pdo->prepare('SELECT user_id,blocked FROM friends_state WHERE user_id IN (?,?)');
         $query->execute([$first, $second]);
-        foreach ($query->fetchAll() as $row) if (FriendsRules::has(json_decode($row['blocked'], true, 512, JSON_THROW_ON_ERROR), $row['user_id'] === $first ? $second : $first)) return true;
+        foreach ($query->fetchAll() as $row) if (FriendsRules::has(FriendsStorage::field($row['blocked'],'blocked'), $row['user_id'] === $first ? $second : $first)) return true;
         return false;
     }
     public function find(string $user, $query): array
@@ -138,14 +166,17 @@ class FriendsService implements FriendsBlockPolicy
     {
         $user = FriendsRules::uuid($user); $target = FriendsRules::uuid($target); $expected = FriendsRules::revision($expectedRevision);
         if ($user === $target || !in_array($action, FriendsRules::ACTIONS, true)) FriendsRules::invalid('Invalid social action');
-        $request = in_array($action, ['accept', 'decline', 'cancel'], true) ? FriendsRules::uuid($requestId) : null;
+        $pendingAction=in_array($action, ['accept', 'decline', 'cancel'], true);
+        if (!$pendingAction&&$requestId!==null) FriendsRules::invalid('requestId belongs only to an exact pending decision');
+        $request = $pendingAction ? FriendsRules::uuid($requestId) : null;
+        $this->requireWriteScope();
         $changed = $this->transaction(function () use ($action, $user, $target, $expected, $request) {
             $present = $this->players([$user, $target], true);
             if (!in_array($user, $present, true)) FriendsRules::missing();
             $a = $this->state($user, true); $b = $this->state($target, true);
             if ($a['revision'] !== $expected) FriendsRules::conflict();
             $now = ($this->clock)();
-            [$nextA, $nextB, $notice] = FriendsRules::transition($action, $user, $target, $a, $b, $request, InboxRules::instant($now), $this->maxFriends);
+            [$nextA, $nextB, $notice] = FriendsRules::transition($action, $user, $target, $a, $b, $request, InboxRules::instant($now), $this->maxFriends, $this->limits);
             if ($a === $nextA && $b === $nextB) return $a;
             $addsReference = in_array($action, ['request', 'accept'], true) || ($action === 'block' && !FriendsRules::has($a['blocked'], $target));
             if ($addsReference && !in_array($target, $present, true)) FriendsRules::missing();
@@ -161,30 +192,79 @@ class FriendsService implements FriendsBlockPolicy
         });
         return $this->view($user, $changed);
     }
-    /** ON DELETE SET NULL retains the source row as a retry anchor. At most50 peers per call. */
+    /** ON DELETE SET NULL retains a retry anchor. At most50 bilateral/reverse peers per call. */
     public function cleanupDeletedPlayer(string $user): array
     {
-        $user = FriendsRules::uuid($user);
-        if ($this->players([$user])) FriendsRules::fail('STATE_CONFLICT', 'Only an absent player can be cleaned');
-        $query = $this->pdo->prepare('SELECT owner_user_id FROM friends_references WHERE related_user_id=? ORDER BY owner_user_id LIMIT 51');
-        $query->execute([$user]); $owners = $query->fetchAll(PDO::FETCH_COLUMN); $updated = 0;
-        foreach (array_slice($owners, 0, 50) as $owner) {
-            $this->transaction(function () use ($owner, $user) {
-                $present = $this->players([$user, $owner], true);
-                if (in_array($user, $present, true)) FriendsRules::fail('STATE_CONFLICT', 'Deleted player was restored');
-                $before = $this->state($owner, true); $this->save($owner, $before, FriendsRules::without($before, $user, true));
+        $user=FriendsRules::uuid($user);$this->requireWriteScope();
+        if ($this->players([$user])) FriendsRules::fail('STATE_CONFLICT','Only an absent player can be cleaned');
+        $own=$this->state($user);$peers=FriendsStorage::references($own,true);$updated=0;
+        $clean=function(string $owner)use($user):void {
+            $this->transaction(function()use($owner,$user){
+                $present=$this->players([$user,$owner],true);
+                if (in_array($user,$present,true)) FriendsRules::fail('STATE_CONFLICT','Deleted player was restored');
+                $source=$this->state($user,true);$peer=$this->state($owner,true);
+                $nextSource=FriendsRules::without($source,$owner,true);$nextPeer=FriendsRules::without($peer,$user,true);
+                if ($source===$nextSource&&$peer===$nextPeer) FriendsStorage::required();
+                $this->save($user,$source,$nextSource);$this->save($owner,$peer,$nextPeer);
             });
-            $updated++;
+        };
+        foreach(array_slice($peers,0,50)as $peer){$clean($peer);$updated++;}
+        if ($updated<50) {
+            $q=$this->pdo->prepare('SELECT owner_user_id FROM friends_references WHERE related_user_id=? ORDER BY owner_user_id LIMIT '.(51-$updated));$q->execute([$user]);$owners=$q->fetchAll(PDO::FETCH_COLUMN);
+            foreach(array_slice($owners,0,50-$updated)as $owner){$clean($owner);$updated++;}
         }
-        $query->execute([$user]); $remaining = $query->fetchColumn() !== false;
-        if (!$remaining) $this->transaction(function () use ($user) {
-            if ($this->players([$user], true)) FriendsRules::fail('STATE_CONFLICT', 'Deleted player was restored');
-            $this->pdo->prepare('DELETE FROM friends_state WHERE user_id=?')->execute([$user]);
+        $complete=$this->transaction(function()use($user){
+            if ($this->players([$user],true)) FriendsRules::fail('STATE_CONFLICT','Deleted player was restored');
+            $remaining=FriendsStorage::references($this->state($user,true),true);
+            $q=$this->pdo->prepare('SELECT owner_user_id FROM friends_references WHERE related_user_id=? ORDER BY owner_user_id LIMIT 1');$q->execute([$user]);
+            if ($remaining||$q->fetchColumn()!==false)return false;
+            $this->pdo->prepare('DELETE FROM friends_state WHERE user_id=?')->execute([$user]);return true;
         });
-        return ['userId' => $user, 'updated' => $updated, 'complete' => !$remaining];
+        return ['userId'=>$user,'updated'=>$updated,'complete'=>$complete];
+    }
+    /** Before removing a legacy reverse union, every bilateral edge must have its exact other side. */
+    private function requireLegacyBilateral(string $user,array $state): void
+    {
+        $ids=[];foreach(['friends','incoming','outgoing']as$field)foreach($state[$field]as$entry)$ids[$entry['userId']]=true;
+        $rows=[];
+        foreach(array_chunk(array_keys($ids),200)as$batch){
+            $q=$this->pdo->prepare('SELECT user_id,friends,incoming,outgoing FROM friends_state WHERE user_id IN ('.implode(',',array_fill(0,count($batch),'?')).')');$q->execute($batch);
+            foreach($q->fetchAll(PDO::FETCH_ASSOC)as$row)$rows[$row['user_id']]=$row;$q->closeCursor();
+        }
+        foreach(['friends'=>'friends','incoming'=>'outgoing','outgoing'=>'incoming']as$field=>$other)foreach($state[$field]as$entry){
+            $row=$rows[$entry['userId']]??null;if($row===null)FriendsStorage::required();
+            $matching=array_values(array_filter(FriendsStorage::field($row[$other],$other),static function($v)use($user){return $v['userId']===$user;}));
+            if(count($matching)!==1||($field!=='friends'&&$matching[0]['requestId']!==$entry['requestId']))FriendsStorage::required();
+        }
+    }
+    /** Explicit cold conversion only. Each unchanged original and reverse index share one transaction. */
+    public function compactPage(?string $after=null,int $limit=10,bool $apply=false): array
+    {
+        if($apply)$this->requireWriteScope();
+        if($after!==null)$after=FriendsRules::uuid($after);
+        if($limit<1||$limit>50)throw new InvalidArgumentException('Cold relationship page must contain1..50 rows');
+        $q=$this->pdo->prepare('SELECT user_id FROM friends_state'.($after===null?'':' WHERE user_id>?').' ORDER BY user_id LIMIT '.$limit);$q->execute($after===null?[]:[$after]);$ids=$q->fetchAll(PDO::FETCH_COLUMN);$q->closeCursor();$converted=0;
+        foreach($ids as $user)$converted+=$this->transaction(function()use($user,$apply){
+            $this->players([$user],$apply);
+            $q=$this->pdo->prepare('SELECT revision,active_user_id,friends,incoming,outgoing,blocked FROM friends_state WHERE user_id=?'.($apply&&$this->mysql?' FOR UPDATE':''));$q->execute([$user]);$row=$q->fetch(PDO::FETCH_ASSOC);$q->closeCursor();if($row===false)return 0;
+            $state=FriendsStorage::state($row,$user);$expected=FriendsStorage::references($state,$state['_legacy']);
+            $q=$this->pdo->prepare('SELECT related_user_id FROM friends_references WHERE owner_user_id=? ORDER BY related_user_id');$q->execute([$user]);$actual=$q->fetchAll(PDO::FETCH_COLUMN);$q->closeCursor();if($actual!==$expected)FriendsStorage::required();
+            $encoded=[];foreach(FriendsStorage::FIELDS as $field){$encoded[$field]=FriendsStorage::encode($state[$field],$field);if($this->mysql&&strlen($encoded[$field])>FriendsStorage::FIELD_BYTES)FriendsStorage::required();}
+            if(!$state['_legacy'])return 0;
+            $this->requireLegacyBilateral($user,$state);
+            if($apply){
+                $where='';foreach(FriendsStorage::FIELDS as $field)$where.=' AND '.($this->mysql?'BINARY '.$field.'=BINARY ?':$field.'=? COLLATE BINARY');
+                $q=$this->pdo->prepare('UPDATE friends_state SET friends=?,incoming=?,outgoing=?,blocked=? WHERE user_id=? AND revision=?'.$where);
+                $args=array_merge(array_values($encoded),[$user,$state['revision']],array_map(static function($field)use($row){return $row[$field];},FriendsStorage::FIELDS));$q->execute($args);if($q->rowCount()!==1)FriendsRules::conflict();
+                $compact=$state;$compact['_legacy']=false;$this->references($user,$state,$compact);
+            }
+            return 1;
+        });
+        return ['examined'=>count($ids),'legacyPlayers'=>$converted,'applied'=>$apply,'nextCursor'=>$ids?end($ids):$after,'complete'=>count($ids)<$limit];
     }
     public function cleanupDeleted(): array
     {
+        $this->requireWriteScope();
         $query = $this->pdo->query('SELECT user_id FROM friends_state WHERE active_user_id IS NULL ORDER BY user_id LIMIT 10');
         $results = [];
         foreach ($query->fetchAll(PDO::FETCH_COLUMN) as $id) {

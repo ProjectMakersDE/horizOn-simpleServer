@@ -3,6 +3,7 @@
 declare(strict_types=1);
 require_once __DIR__.'/MatchTransitions.php';
 require_once __DIR__.'/MatchStorage.php';
+require_once __DIR__.'/../Friends/FriendsStorage.php';
 /** One installation. All page queries select summaries, never opaque payloads or reports. */
 class MatchStore
 {
@@ -14,7 +15,7 @@ class MatchStore
     public function users(array $ids,bool $lock=false): array
     {$ids=array_values(array_unique($ids));sort($ids,SORT_STRING);if(!$ids)return[];if(count($ids)>256)throw new LogicException('User projection bound');$q=$this->pdo->prepare('SELECT id FROM users WHERE id IN ('.implode(',',array_fill(0,count($ids),'?')).') ORDER BY id'.$this->lock($lock));$q->execute($ids);return $q->fetchAll(PDO::FETCH_COLUMN);}
     public function blocked(string $actor,array $peers,bool $lock=false): array
-    {$ids=array_values(array_unique(array_merge([$actor],$peers)));sort($ids,SORT_STRING);if(count($ids)>2049)throw new LogicException('Block projection bound');$q=$this->pdo->prepare('SELECT user_id,blocked FROM friends_state WHERE user_id IN ('.implode(',',array_fill(0,count($ids),'?')).') ORDER BY user_id'.$this->lock($lock));$q->execute($ids);$blocked=[];foreach($q->fetchAll(PDO::FETCH_ASSOC)as$r){$list=array_column(json_decode($r['blocked'],true,512,JSON_THROW_ON_ERROR),'userId');if($r['user_id']===$actor)$blocked=array_merge($blocked,array_intersect($list,$peers));elseif(in_array($actor,$list,true))$blocked[]=$r['user_id'];}return array_values(array_unique($blocked));}
+    {$ids=array_values(array_unique(array_merge([$actor],$peers)));sort($ids,SORT_STRING);if(count($ids)>2049)throw new LogicException('Block projection bound');$q=$this->pdo->prepare('SELECT user_id,blocked FROM friends_state WHERE user_id IN ('.implode(',',array_fill(0,count($ids),'?')).') ORDER BY user_id'.$this->lock($lock));$q->execute($ids);$blocked=[];foreach($q->fetchAll(PDO::FETCH_ASSOC)as$r){$list=array_column(FriendsStorage::field($r['blocked'],'blocked'),'userId');if($r['user_id']===$actor)$blocked=array_merge($blocked,array_intersect($list,$peers));elseif(in_array($actor,$list,true))$blocked[]=$r['user_id'];}return array_values(array_unique($blocked));}
     public function player(string $user,bool $lock=false): array
     {
         if($lock&&$this->mysql){$snapshot=$this->player($user);$current=$this->one('SELECT revision FROM player_matches WHERE user_id=?',[$user],true);if(($current!==null)!==$snapshot['exists']||($current!==null&&(int)$current['revision']!==$snapshot['revision']))MatchRules::fail('STATE_CONFLICT');return $snapshot;}

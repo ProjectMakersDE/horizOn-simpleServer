@@ -1034,7 +1034,13 @@ safe-integer `expectedRevision`; decisions additionally require the exact curren
 substitute a revision and silently repeat. Friend codes encode the public UUID;
 they do not authorize a write or search by name/email.
 
-Self-hosted limits are200 friends,20 incoming,20 outgoing and100 blocks. Both
+Operator defaults are200 friends,20 incoming,20 outgoing and100 blocks, configured
+by `FRIENDS_MAX_FRIENDS`, `FRIENDS_INCOMING_REQUESTS`, `FRIENDS_OUTGOING_REQUESTS`
+and `FRIENDS_BLOCKED`. Defaults are not maximums; reductions preserve existing
+reads/removal/cancellation/unblock. The existing portable MySQL TEXT frame is65,535
+bytes per vector. Its exact Base64 encoding supports3,071 friends/blocks or1,535
+requests per direction; configuration above these technical capacities is rejected
+explicitly. Larger existing SQLite vectors remain readable and shrinkable. Both
 relationship CAS writes and ordinary30-day Inbox notices commit in one explicit
 connection-bound transaction. Full Inbox rolls everything back. Crossing requests
 need explicit acceptance. Blocking clears both directions without notification;
@@ -1045,7 +1051,8 @@ and exact lookups use sorted user-row locks to fence deletion and block changes;
 SQLite uses the existing
 BEGIN IMMEDIATE scope. No global transaction manager, online flag or heartbeat.
 
-Public displays use one bounded Player Profile projection, without auth fields,
+Public displays use selected Player Profile projections in batches of at most200
+distinct players, including every retained peer beyond the current quota, without auth fields,
 email, unlocks, values or saves. Since this edition stores the current session on
 the user row, its actual anonymous/Apple sign-in update also stores the monotone
 maximum `last_login_millis`. No extra sign-in query is added. Legacy rows remain
@@ -1063,7 +1070,13 @@ php bin/friends.php cleanup-deleted
 Public Account-Key/admin impersonation and realtime/Chat remain unsupported.
 When an operator physically deletes a user, a nullable foreign key retains its
 relationship row as an indexed deletion anchor, including block-only targets at
-revision0. The related-player index finds arbitrarily many incoming blocks.
+revision0. Bilateral friends/request lists anchor their own retryable cleanup;
+`friends_references` holds only outgoing blocks, whose reverse index finds
+arbitrarily many incoming blocks. The former redundant all-relationship union is
+removed only by explicit cold conversion after proving every bilateral original
+friend/request counterpart. Legacy mutations retain the legacy format and its
+union index until that proof; explicit removal remains possible for a one-sided
+original, while cold conversion stops unchanged for reconciliation.
 Schedule the local cleanup command to process at most10 deleted anchors with at
 most50 referencing players each per invocation; repeat until complete. A deliberate
 operator restore rebinds only its FK anchor and preserves all relationships/revisions,
@@ -1082,16 +1095,43 @@ explicit loopback MySQL `task1009_<hex>` database via `HORIZON_FRIENDS_TEST_DSN`
 host or database from application credentials. Real MySQL/PHP7.4 execution is
 recorded separately after its isolated probe.
 
-Isolated SQL statement counts, excluding HTTP authentication/bootstrap and showing
-BEGIN/COMMIT separately: an empty snapshot uses two SELECTs, a populated snapshot
-three, an exact lookup three plus its transaction, a standalone bilateral block
-policy one plus its transaction, and a reviewed request no-op four plus its
-transaction with zero writes. A first request or acceptance uses six SELECTs and
-seven bounded DML statements including both reverse-index replacements and the
-Inbox. Existing/missing peers and empty reference sets can reduce the write count.
-The visible-profile fanout stays one selected bulk query for at most240 peers;
-reverse references are at most340 per player. These are service statement counts,
-not hosted Signup-relative latency or capacity measurements.
+Storage retains the existing SQL PK/FK/index layout. Each of the four TEXT columns
+contains `[1,"canonicalBase64"]`: friends/blocks pack16 UUID bytes each;
+incoming/outgoing pack32 bytes per counterpart/request pair. Each vector occupies
+`6 + 4*ceil(tupleBytes*count/3)` ASCII bytes, including an empty vector's6 bytes.
+No names/profiles or relationship chronology are copied. New/converted
+`since`, `createdAt` and `blockedAt` are nullable unknown values. Unconverted known
+legacy chronology remains readable. Actual current login activity stays separate.
+Both friendship sides intentionally hold their counterpart UUID once. User identity,
+active deletion pointer, revision, reverse block rows and all SQL index/record/page
+costs are additional; the unchanged MySQL keys remain CHAR(36).
+
+Cold conversion is explicit local operator work, with at most50 original owners
+per invocation. Upgrade all readers/writers together and stop old writers; check
+an independent backup/restore first. Reads, login and startup never rewrite a
+relationship. Check/apply validate the exact legacy dialect, original identities,
+integers, reverse references and reciprocal friend/request identities in bounded
+200-owner projections. A missing or replaced counterpart cannot silently lose its
+reverse deletion anchor. Unknown data remains `MIGRATION_REQUIRED`.
+Each conversion CAS and its reverse-index reduction share one transaction; original
+public revisions/request IDs remain unchanged. Failed rows retain their original
+input for an idempotent restart. This operation does not clean deleted players,
+send notices, grant anything or prune unrelated state.
+
+```bash
+php bin/friends.php compact-check - 10
+php bin/friends.php compact-apply - 10 writers-stopped backup-restored
+# Resume with nextCursor until complete:true; acknowledgements are operator attestations.
+```
+
+Service SQL costs exclude HTTP auth/bootstrap/rate limiting and transaction setup.
+A snapshot uses one actor existence read, one relationship read and
+`ceil(unique public peers/200)` public projections. Standalone bilateral block
+policy uses one projected query plus its explicit transaction. A no-op changes no
+row. Normal friendship/request changes do not rewrite the reverse index; actual
+block differences use batches of at most200 indexed pairs. Legacy validation can
+add a reverse-reference read. Measured native profiles and SQL allocation evidence
+are recorded separately from these source-derived query formulas.
 
 
 ## Groups (self-hosted REST)
