@@ -61,4 +61,14 @@ class Config
         $value = self::get($key, (string)$default);
         return (int)$value;
     }
+
+    /** Strict integer operator policy. Only explicitly zero-capable fields lower the minimum. */
+    public static function operatorLimit(string $key, int $default, int $maximum = 2147483647, int $minimum = 1): int
+    {
+        $value = self::$values[$key] ?? (string)$default;
+        if (!preg_match('/^(0|[1-9][0-9]{0,9})$/D', $value) || (int)$value < $minimum || (int)$value > $maximum) {
+            throw new InvalidArgumentException('Invalid operator limit: ' . $key);
+        }
+        return (int)$value;
+    }
 }

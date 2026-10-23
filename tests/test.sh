@@ -514,8 +514,7 @@ REDEEM_RESP=$(curl -s "$BASE_URL/gift-codes/redeem" \
     -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
     -H "Authorization: Bearer $SESSION_TOKEN" \
     -d "{\"code\":\"NONEXISTENT\",\"userId\":\"$USER_ID\"}")
-assert_contains "POST /gift-codes/redeem not found returns success false" '"success":false' "$REDEEM_RESP"
-assert_contains "POST /gift-codes/redeem returns not found message" 'not found' "$REDEEM_RESP"
+assert_contains "V1 gift requests require explicit client upgrade" '"code":"UPGRADE_REQUIRED"' "$REDEEM_RESP"
 
 # Redeem without session -> 401 SESSION_REQUIRED, no transition window, no Deprecation/Sunset
 NOSESSION_RESP=$(curl -s -D - -w "\n%{http_code}" "$BASE_URL/gift-codes/redeem" \
@@ -541,7 +540,7 @@ SESSION_TOKEN_2=$(echo "$SIGNIN2_BODY" | php -r 'echo json_decode(file_get_conte
 # Seed a redeemable gift code directly in the test database
 php -r '$pdo = new PDO("sqlite:./data/test_horizon_integration.db");
 $stmt = $pdo->prepare("INSERT INTO gift_codes (id, code, reward_type, reward_data, max_redemptions, current_redemptions, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)");
-$stmt->execute(["gift-886", "SESSION886", "currency", "{\"gold\":5}", 10, 0, gmdate("Y-m-d\\TH:i:s")]);'
+$stmt->execute(["6f1c0e9e-0000-4000-8000-000000000886", "SESSION886", "currency", "{\"gold\":5}", 10, 0, gmdate("Y-m-d\\TH:i:s")]);'
 
 # Invalid session -> 401
 REDEEM_BAD_SESSION_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/gift-codes/redeem" \
@@ -557,11 +556,18 @@ REDEEM_FOREIGN_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/gift-c
     -d "{\"code\":\"SESSION886\",\"userId\":\"$USER_ID\"}")
 assert_status "POST /gift-codes/redeem with another player's session" 403 "$REDEEM_FOREIGN_STATUS"
 
+# Read-only authenticated prepare. Keep this exact body across an uncertain response.
+gift_intent() {
+    local prepared
+    prepared=$(curl -fsS "$BASE_URL/gift-codes/validate" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $3" -d "{\"code\":\"$1\",\"userId\":\"$2\",\"includeIntent\":true}") || return 1
+    php -r '$p=json_decode($argv[1],true,512,JSON_THROW_ON_ERROR);if(($p["valid"]??false)!==true)exit(1);unset($p["valid"]);$p["code"]=$argv[2];$p["userId"]=$argv[3];echo json_encode($p,JSON_THROW_ON_ERROR);' "$prepared" "$1" "$2"
+}
+SESSION_GIFT_INTENT=$(gift_intent SESSION886 "$USER_ID" "$SESSION_TOKEN")
 # Own session -> redeemed
 REDEEM_OWN_RESP=$(curl -s -w "\n%{http_code}" "$BASE_URL/gift-codes/redeem" \
     -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
     -H "Authorization: Bearer $SESSION_TOKEN" \
-    -d "{\"code\":\"SESSION886\",\"userId\":\"$USER_ID\"}")
+    -d "$SESSION_GIFT_INTENT")
 REDEEM_OWN_BODY=$(echo "$REDEEM_OWN_RESP" | sed '$d')
 REDEEM_OWN_STATUS=$(echo "$REDEEM_OWN_RESP" | tail -1)
 assert_status "POST /gift-codes/redeem with own session" 200 "$REDEEM_OWN_STATUS"
@@ -700,8 +706,8 @@ assert_contains "CORS preflight allows Authorization" 'Authorization' "$PP_CORS_
 php -r '$pdo = new PDO("sqlite:./data/test_horizon_integration.db");
 $stmt = $pdo->prepare("INSERT INTO gift_codes (id, code, reward_type, reward_data, max_redemptions, current_redemptions, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)");
 $now = gmdate("Y-m-d\\TH:i:s");
-$stmt->execute(["gift-881", "GRANT881", "cosmetic", "{\"gold\":1,\"grants\":[\"frame.gold\",\"badge.supporter\",\"gone.item\"]}", 10, 0, $now]);
-$stmt->execute(["gift-881-cap", "CAP881", "cosmetic", "{\"grants\":[\"badge.supporter\"]}", 10, 0, $now]);'
+$stmt->execute(["6f1c0e9e-0000-4000-8000-000000000881", "GRANT881", "cosmetic", "{\"gold\":1,\"grants\":[\"frame.gold\",\"badge.supporter\",\"gone.item\"]}", 10, 0, $now]);
+$stmt->execute(["6f1c0e9e-0000-4000-8000-000000000882", "CAP881", "cosmetic", "{\"grants\":[\"badge.supporter\"]}", 10, 0, $now]);'
 
 # Code with grants without session -> 401, code not used up
 GRANT_NOSESSION_RESP=$(curl -s -w "\n%{http_code}" "$BASE_URL/gift-codes/redeem" \
@@ -717,20 +723,21 @@ GRANT_STILL_VALID=$(curl -s "$BASE_URL/gift-codes/validate" \
 assert_contains "code with grants is not used up without session" '"valid":true' "$GRANT_STILL_VALID"
 
 # Code with grants with session -> unlocks written, unknown grant skipped
+GRANT_INTENT=$(gift_intent GRANT881 "$USER_ID" "$SESSION_TOKEN")
 GRANT_OWN_RESP=$(curl -s -w "\n%{http_code}" "$BASE_URL/gift-codes/redeem" \
     -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" \
-    -d "{\"code\":\"GRANT881\",\"userId\":\"$USER_ID\"}")
+    -d "$GRANT_INTENT")
 GRANT_OWN_BODY=$(echo "$GRANT_OWN_RESP" | sed '$d')
 GRANT_OWN_STATUS=$(echo "$GRANT_OWN_RESP" | tail -1)
 assert_status "redeem a code with grants with own session" 200 "$GRANT_OWN_STATUS"
 assert_contains "redeem returns grantedUnlocks" '"grantedUnlocks":["frame.gold","badge.supporter"]' "$GRANT_OWN_BODY"
 assert_not_contains "grant missing from the catalog is skipped" 'gone.item"]' "$GRANT_OWN_BODY"
 
-# Redeem without grants returns an empty grantedUnlocks
+# V1 never silently maps to a fresh prepared sequence
 GRANT_NONE_BODY=$(curl -s "$BASE_URL/gift-codes/redeem" \
     -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" \
     -d "{\"code\":\"NONEXISTENT\",\"userId\":\"$USER_ID\"}")
-assert_contains "failed redeem returns empty grantedUnlocks" '"grantedUnlocks":[]' "$GRANT_NONE_BODY"
+assert_contains "V1 has a stable upgrade error" '"code":"UPGRADE_REQUIRED"' "$GRANT_NONE_BODY"
 
 # The unlocked frame is now available and can be selected
 PP_AFTER_GRANT_BODY=$(curl -s "$BASE_URL/player-profile?userId=$USER_ID" \
@@ -747,9 +754,10 @@ php -r '$pdo = new PDO("sqlite:./data/test_horizon_integration.db");
 $ids = array_map(function ($i) { return "old.item" . $i; }, range(1, 25));
 $stmt = $pdo->prepare("UPDATE users SET unlocks = ? WHERE id = ?");
 $stmt->execute([json_encode($ids), $argv[1]]);' "$USER_ID_2"
+CAP_INTENT=$(gift_intent CAP881 "$USER_ID_2" "$SESSION_TOKEN_2")
 GRANT_CAP_RESP=$(curl -s -w "\n%{http_code}" "$BASE_URL/gift-codes/redeem" \
     -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN_2" \
-    -d "{\"code\":\"CAP881\",\"userId\":\"$USER_ID_2\"}")
+    -d "$CAP_INTENT")
 GRANT_CAP_BODY=$(echo "$GRANT_CAP_RESP" | sed '$d')
 GRANT_CAP_STATUS=$(echo "$GRANT_CAP_RESP" | tail -1)
 assert_status "redeem over the unlock cap" 409 "$GRANT_CAP_STATUS"
@@ -912,6 +920,287 @@ if php tests/remote-config-collation.php; then
 else
     FAIL=$((FAIL + 1))
 fi
+
+# ---- Player Values: SDK HTTP contract and isolated storage races ----
+php bin/player-values.php configure 0 <<'JSON' >/dev/null
+{"definitions":[{"key":"gold","name":"Gold","initialBalance":100,"maxBalance":1000,"adjustment":{"enabled":true,"maxPerCall":10,"dailyLimit":20}},{"key":"gem","name":"Gem","maxBalance":100}],"offers":[{"key":"gems","name":"Gems","costs":[{"key":"gold","amount":30}],"rewards":[{"key":"gem","amount":2}]}]}
+JSON
+PV_MISSING=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/player-values?userId=$USER_ID" -H "X-API-Key: $API_KEY")
+assert_status 'player values require session' 401 "$PV_MISSING"
+PV_FOREIGN=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/player-values?userId=00000000-0000-0000-0000-000000000001" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN")
+assert_status 'player values reject foreign session' 403 "$PV_FOREIGN"
+PV_STATE=$(curl -s "$BASE_URL/player-values?userId=$USER_ID" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN")
+assert_contains 'player values initial balance' '"balance":100' "$PV_STATE"
+PV_OFFERS=$(curl -s "$BASE_URL/player-values/offers?userId=$USER_ID" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN")
+assert_contains 'offer catalogue contract' '"costs":[{"key":"gold","amount":30}]' "$PV_OFFERS"
+PV_OP=$(php -r 'require "src/Core/Database.php"; echo (int)floor(microtime(true)*1000), ":", Database::uuid();')
+PV_BODY="{\"userId\":\"$USER_ID\",\"offerKey\":\"gems\",\"operationId\":\"$PV_OP\"}"
+PV_BUY=$(curl -s "$BASE_URL/player-values/purchase" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$PV_BODY")
+assert_contains 'purchase debit' '"balance":70' "$PV_BUY"
+assert_contains 'purchase applied once' '"replayed":false' "$PV_BUY"
+PV_REPLAY=$(curl -s "$BASE_URL/player-values/purchase" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$PV_BODY")
+assert_contains 'purchase replay' '"replayed":true' "$PV_REPLAY"
+assert_contains 'purchase replay retains balance' '"balance":70' "$PV_REPLAY"
+for PV_BAD_AMOUNT in '1.5' '"1"' 'null' '9007199254740992'; do
+    PV_BAD=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/player-values/adjust" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "{\"userId\":\"$USER_ID\",\"key\":\"gold\",\"amount\":$PV_BAD_AMOUNT,\"reason\":\"test\",\"operationId\":\"$PV_OP\"}")
+    assert_status "unsafe adjustment number $PV_BAD_AMOUNT" 400 "$PV_BAD"
+done
+PV_ADMIN=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$TEST_PORT/api/v1/admin/player-values/config" -H "X-API-Key: $API_KEY")
+assert_status 'public app key never exposes operator configuration' 404 "$PV_ADMIN"
+if php tests/player-values.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/player-values-bootstrap.php "$TEST_PORT"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
+# Gift V2: an authenticated read prepares the exact immutable UUID/count/revision tuple.
+php -r 'require "src/Core/Config.php";require "src/Core/Database.php";Config::load(".env");$p=Database::connect();$p->prepare("INSERT INTO gift_codes(id,code,reward_data,max_redemptions) VALUES(?,?,?,?)")->execute([Database::uuid(),"VALUES-HTTP","opaque-gift",10]);'
+php bin/gift-codes.php set-values VALUES-HTTP <<'JSON' >/dev/null
+{"values":[{"key":"gold","amount":5}]}
+JSON
+GC_BODY=$(gift_intent VALUES-HTTP "$USER_ID" "$SESSION_TOKEN")
+GC_FIRST=$(curl -s "$BASE_URL/gift-codes/redeem" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$GC_BODY")
+assert_contains 'gift reward response includes actual values' '"grantedValues":[{"key":"gold","amount":5}]' "$GC_FIRST"
+assert_contains 'gift reward includes current player values' '"balance":75' "$GC_FIRST"
+assert_contains 'first gift reward not replayed' '"replayed":false' "$GC_FIRST"
+GC_REPLAY=$(curl -s "$BASE_URL/gift-codes/redeem" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$GC_BODY")
+assert_contains 'gift original ID safely replays' '"replayed":true' "$GC_REPLAY"
+assert_contains 'gift replay contains no historical values' '"grantedValues":[]' "$GC_REPLAY"
+assert_contains 'gift replay contains no historical opaque payload' '"giftData":null' "$GC_REPLAY"
+assert_contains 'gift count is an exact decimal string' '"count":"1"' "$GC_REPLAY"
+assert_contains 'gift original ID never regrants' '"balance":75' "$GC_REPLAY"
+for GC_BAD in '0' '"01"' '"9223372036854775808"'; do
+    GC_BAD_BODY=$(php -r '$d=json_decode($argv[1],true);$d["expectedCount"]=json_decode($argv[2],true);echo json_encode($d);' "$GC_BODY" "$GC_BAD")
+    GC_INVALID=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/gift-codes/redeem" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$GC_BAD_BODY")
+    assert_status 'gift exact counter rejects numeric/coerced/out-of-range values' 400 "$GC_INVALID"
+done
+GC_MIXED=$(php -r '$d=json_decode($argv[1],true);$d["idempotencyId"]="legacy";echo json_encode($d);' "$GC_BODY")
+GC_MIXED_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/gift-codes/redeem" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$GC_MIXED")
+assert_status 'mixed V1/V2 request is never translated' 400 "$GC_MIXED_STATUS"
+GC_PRIVATE=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/gift-codes/validate" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -d "{\"code\":\"VALUES-HTTP\",\"userId\":\"$USER_ID\",\"includeIntent\":true}")
+assert_status 'intent preparation requires the player session' 401 "$GC_PRIVATE"
+if php tests/gift-code-values.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/gift-code-migration.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/gift-code-cli.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/gift-code-storage.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+# The SDK preflight must distinguish an unsupported gateway from a transient transport error.
+REALTIME_RESP=$(curl -s -w "\n%{http_code}" "$BASE_URL/realtime/session" \
+    -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" -d '{}')
+assert_status "realtime preflight is explicitly unsupported" 501 "$(echo "$REALTIME_RESP" | tail -1)"
+assert_contains "realtime preflight names NOT_SUPPORTED" '"code":"NOT_SUPPORTED"' "$REALTIME_RESP"
+
+# ---- Statistics: exact integer session batches and conditional definitions ----
+php bin/statistics.php configure 0 <<'JSON' >/dev/null
+{"definitions":[{"key":"kills","name":"Kills","mode":"sum","maxPerUpdate":10},{"key":"best_score","name":"Best","mode":"max"}]}
+JSON
+ST_MISSING=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/statistics?userId=$USER_ID" -H "X-API-Key: $API_KEY")
+assert_status 'statistics requires matching Bearer' 401 "$ST_MISSING"
+ST_DEFS_MISSING=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/statistics/definitions" -H "X-API-Key: $API_KEY")
+assert_status 'statistics definitions require Bearer' 401 "$ST_DEFS_MISSING"
+ST_FOREIGN=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/statistics?userId=00000000-0000-0000-0000-000000000001" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN")
+assert_status 'statistics rejects foreign player session' 403 "$ST_FOREIGN"
+ST_STATE=$(curl -s "$BASE_URL/statistics?userId=$USER_ID" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN")
+assert_contains 'statistics untouched values distinguish zero' '"hasValue":false' "$ST_STATE"
+assert_contains 'statistics snapshot includes operation window' '"maxFutureSkewSeconds":30' "$ST_STATE"
+ST_DEFS=$(curl -s "$BASE_URL/statistics/definitions?definitionVersion=1" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN")
+assert_contains 'statistics unchanged definitions are null' '"definitions":null' "$ST_DEFS"
+ST_OP=$(php -r 'require "src/Core/Database.php"; echo (int)floor(microtime(true)*1000), ":", Database::uuid();')
+ST_BODY=$(php -r 'echo json_encode(["userId"=>$argv[1],"operationId"=>$argv[2],"updates"=>[["key"=>"kills","value"=>3],["key"=>"best_score","value"=>9007199254740991]]]);' "$USER_ID" "$ST_OP")
+ST_APPLIED=$(curl -s "$BASE_URL/statistics" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$ST_BODY")
+assert_contains 'statistics exact maximum integer survives HTTP' '"value":9007199254740991' "$ST_APPLIED"
+assert_contains 'statistics batch advances revision once' '"revision":1' "$ST_APPLIED"
+ST_REPLAY=$(curl -s "$BASE_URL/statistics" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$ST_BODY")
+assert_contains 'statistics original batch replays' '"replayed":true' "$ST_REPLAY"
+assert_contains 'statistics replay never increments revision' '"revision":1' "$ST_REPLAY"
+for ST_NUMBER in '1.5' '"1"' 'null' '9007199254740992'; do
+    ST_BAD_BODY=$(php -r 'echo "{\"userId\":\"".$argv[1]."\",\"operationId\":\"".$argv[2]."\",\"updates\":[{\"key\":\"kills\",\"value\":".$argv[3]."}]}";' "$USER_ID" "$ST_OP" "$ST_NUMBER")
+    ST_BAD=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/statistics" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$ST_BAD_BODY")
+    assert_status "statistics rejects coerced or unsafe value $ST_NUMBER" 400 "$ST_BAD"
+done
+ST_CONFLICT_BODY=$(php -r '$d=json_decode($argv[1],true);$d["updates"][0]["value"]=4;echo json_encode($d);' "$ST_BODY")
+ST_CONFLICT=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/statistics" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$ST_CONFLICT_BODY")
+assert_status 'statistics ID payload conflict is409' 409 "$ST_CONFLICT"
+ST_ADMIN=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$TEST_PORT/api/v1/admin/statistics/definitions" -H "X-API-Key: $API_KEY")
+assert_status 'statistics operator configuration is never an app admin route' 404 "$ST_ADMIN"
+if php tests/statistics.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/statistics-compact.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
+# ---- Achievements: hidden metadata, manual guard and atomic statistic integration ----
+php bin/achievements.php configure 0 <<'JSON' >/dev/null
+{"definitions":[{"key":"first-report","name":"First report","mode":"statistic","condition":{"statisticKey":"kills","threshold":1}},{"key":"manual-secret","name":"Secret","mode":"manual","hidden":true}]}
+JSON
+ACH_MISSING=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/achievements?userId=$USER_ID" -H "X-API-Key: $API_KEY")
+assert_status 'achievements require player Bearer' 401 "$ACH_MISSING"
+ACH_FOREIGN=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/achievements?userId=00000000-0000-0000-0000-000000000001" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN")
+assert_status 'achievements forbid foreign player' 403 "$ACH_FOREIGN"
+ACH_LOCKED=$(curl -s "$BASE_URL/achievements?userId=$USER_ID" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN")
+if [[ "$ACH_LOCKED" != *manual-secret* ]]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); echo 'FAIL: hidden locked metadata exposed'; fi
+ACH_OP=$(php -r 'require "src/Core/Database.php";echo Database::nowMillis(),":",Database::uuid();')
+ACH_REPORT_BODY="{\"userId\":\"$USER_ID\",\"operationId\":\"$ACH_OP\",\"updates\":[{\"key\":\"kills\",\"value\":0}]}"
+ACH_REPORT=$(curl -s "$BASE_URL/statistics" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$ACH_REPORT_BODY")
+assert_contains 'statistics report includes same-transaction achievement' '"newlyUnlocked":["first-report"]' "$ACH_REPORT"
+ACH_REPLAY=$(curl -s "$BASE_URL/statistics" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$ACH_REPORT_BODY")
+assert_contains 'statistics replay never repeats unlock notification' '"newlyUnlocked":[]' "$ACH_REPLAY"
+ACH_BODY="{\"userId\":\"$USER_ID\",\"key\":\"manual-secret\"}"
+ACH_UNLOCK=$(curl -s "$BASE_URL/achievements/unlock" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$ACH_BODY")
+assert_contains 'manual unlock reveals hidden metadata' '"name":"Secret"' "$ACH_UNLOCK"
+assert_contains 'manual unlock reports first accepted key' '"newlyUnlocked":["manual-secret"]' "$ACH_UNLOCK"
+ACH_REPEAT=$(curl -s "$BASE_URL/achievements/unlock" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$ACH_BODY")
+assert_contains 'manual unlock repeats safely' '"replayed":true' "$ACH_REPEAT"
+ACH_VERSION=$(php -r 'echo json_decode($argv[1],true)["achievements"]["definitionVersion"];' "$ACH_REPEAT")
+ACH_SAME=$(curl -s "$BASE_URL/achievements?userId=$USER_ID&definitionVersion=$ACH_VERSION" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN")
+assert_contains 'achievement player-visible metadata version can match' '"definitions":null' "$ACH_SAME"
+ACH_DRAIN=$(curl -s "$BASE_URL/achievements/rewards/deliver" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "{\"userId\":\"$USER_ID\",\"keys\":[\"manual-secret\"]}")
+assert_contains 'compact no-reward unlock already complete' '"state":"complete"' "$ACH_DRAIN"
+ACH_ADMIN=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$TEST_PORT/api/v1/admin/achievements/definitions" -H "X-API-Key: $API_KEY")
+assert_status 'achievement operator configuration not exposed as app admin' 404 "$ACH_ADMIN"
+if php tests/achievements.php; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); fi
+if php tests/achievements-compact.php; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); fi
+if php tests/achievements-migration.php; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); fi
+
+# ---- Inbox REST parity ----
+INB_NO_SESSION=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/inbox?userId=$USER_ID" -H "X-API-Key: $API_KEY")
+assert_status 'inbox requires player Bearer' 401 "$INB_NO_SESSION"
+INB_FOREIGN=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/inbox?userId=00000000-0000-0000-0000-000000000001" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN")
+assert_status 'inbox forbids foreign player' 403 "$INB_FOREIGN"
+INB_EMPTY=$(curl -s "$BASE_URL/inbox?userId=$USER_ID" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN")
+assert_contains 'inbox supplies polling interval' '"pollAfterSeconds":120' "$INB_EMPTY"
+assert_contains 'empty inbox counts are JSON object' '"counts":{}' "$INB_EMPTY"
+INB_LONG_SINCE=$(php -r 'echo str_repeat("x",129);')
+INB_BAD_SINCE=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/inbox?userId=$USER_ID&since=$INB_LONG_SINCE" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN")
+assert_status 'inbox rejects oversized since' 400 "$INB_BAD_SINCE"
+INB_MESSAGE=$(php -r 'require "src/Core/Config.php"; require "src/Core/Database.php"; require "src/Inbox/InboxService.php"; Config::load(".env"); $n=Database::nowMillis(); $s=new InboxService(Database::connect()); $r=$s->freeText($argv[1],Database::uuid(),$s->get($argv[1])["revision"],$n,$n+60000,"Your turn");echo $r["entryId"];' "$USER_ID")
+INB_READ_BODY=$(php -r 'echo json_encode(["userId"=>$argv[1],"entryId"=>$argv[2]]);' "$USER_ID" "$INB_MESSAGE")
+INB_READ=$(curl -s "$BASE_URL/inbox/read" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$INB_READ_BODY")
+assert_contains 'inbox read persists flag' '"read":true' "$INB_READ"
+INB_CURSOR=$(php -r 'echo json_decode($argv[1],true)["cursor"];' "$INB_READ")
+INB_UNCHANGED=$(curl -s "$BASE_URL/inbox?userId=$USER_ID&since=$INB_CURSOR" -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN")
+assert_contains 'inbox cursor unchanged retains metadata' '"unchanged":true' "$INB_UNCHANGED"
+assert_contains 'unchanged inbox entries intentionally empty' '"entries":[]' "$INB_UNCHANGED"
+INB_PUB_BODY=$(php -r 'require "src/Core/Database.php";require "src/Inbox/InboxRules.php";$n=Database::nowMillis();echo json_encode(["operationId"=>$n.":".Database::uuid(),"type"=>"reward","textKey"=>"reward.ready","expiresAt"=>InboxRules::instant($n+60000),"attachment"=>["values"=>[["key"=>"gold","amount"=>2]]]]);')
+INB_PUB=$(php bin/inbox.php publish 0 <<< "$INB_PUB_BODY")
+assert_contains 'operator publication provides fresh serverTime' '"serverTime":' "$INB_PUB"
+INB_REWARD=$(php -r 'echo json_decode($argv[1],true)["operation"]["entryId"];' "$INB_PUB")
+INB_CLAIM_BODY=$(php -r 'echo json_encode(["userId"=>$argv[1],"entryId"=>$argv[2]]);' "$USER_ID" "$INB_REWARD")
+INB_PROTECTED=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/inbox/remove" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$INB_CLAIM_BODY")
+assert_status 'inbox protects unclaimed reward' 409 "$INB_PROTECTED"
+INB_CLAIM=$(curl -s "$BASE_URL/inbox/claim" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$INB_CLAIM_BODY")
+assert_contains 'inbox claim atomically returns values' '"playerValues":' "$INB_CLAIM"
+assert_contains 'first inbox claim applies once' '"replayed":false' "$INB_CLAIM"
+INB_REPLAY=$(curl -s "$BASE_URL/inbox/claim" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$INB_CLAIM_BODY")
+assert_contains 'duplicate inbox claim replays' '"replayed":true' "$INB_REPLAY"
+INB_REMOVED=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/inbox/remove" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$INB_CLAIM_BODY")
+assert_status 'claimed reward can be removed' 200 "$INB_REMOVED"
+INB_AFTER_REMOVE=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/inbox/claim" -X POST -H 'Content-Type: application/json' -H "X-API-Key: $API_KEY" -H "Authorization: Bearer $SESSION_TOKEN" -d "$INB_CLAIM_BODY")
+assert_status 'removed reward cannot regrant' 404 "$INB_AFTER_REMOVE"
+INB_ADMIN=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$TEST_PORT/api/v1/admin/inbox/broadcasts" -H "X-API-Key: $API_KEY")
+assert_status 'inbox operator routes are not public app administration' 404 "$INB_ADMIN"
+if php tests/inbox.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/inbox-compact.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/inbox-migration.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
+# ---- Friends: real authenticated REST and independent SQL concurrency/rollback regressions ----
+if php tests/player-values-compact.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/friends-http.php "$BASE_URL" "$API_KEY" "$USER_ID" "$SESSION_TOKEN"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/friends.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/friends-compact.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/friends-migration.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
+# ---- Groups: real player REST plus separate-connection SQL/cleanup regressions ----
+if php tests/groups-http.php "$BASE_URL" "$API_KEY" "$USER_ID" "$SESSION_TOKEN"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/groups.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/groups-migration.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/groups-compact.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
+# ---- Items: exact JSON/canonical bytes, paid grants and SQLite/independent-process races ----
+if php tests/items-http.php "$BASE_URL" "$API_KEY" "$USER_ID" "$SESSION_TOKEN"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/items.php
+php tests/items-compact.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
+if php tests/shared-objects-http.php "$BASE_URL" "$API_KEY" "$USER_ID" "$SESSION_TOKEN"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/shared-objects.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/shared-objects-notice.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/shared-objects-migration.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/shared-objects-compact.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if python3 tests/shared-objects-seek.py; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/chat-http.php "$BASE_URL" "$API_KEY" "$USER_ID" "$SESSION_TOKEN"; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); fi
+if php tests/matches-http.php "$BASE_URL" "$API_KEY"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/matches.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/matches-compact.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/matches-migration.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if python3 tests/matches-seek.py; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/marketplace-http.php "$BASE_URL" "$API_KEY"; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); fi
+if php tests/marketplace.php; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); fi
+if php tests/marketplace-limits.php; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); fi
+if php tests/marketplace-migration.php; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); fi
+
+if php tests/items-migration.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+
+# Exercise direct existing-file dispatch, which Apache/CGI can bypass the index router for.
+# Reuse the suite's owned listener after its API checks instead of touching another port/process.
+kill "$PHP_PID"
+wait "$PHP_PID" 2>/dev/null || true
+PHP_PID=""
+php -S "localhost:${TEST_PORT}" -t "$PROJECT_DIR" > /dev/null 2>&1 &
+PHP_PID=$!
+for i in $(seq 1 10); do
+    if curl -s -o /dev/null "http://localhost:${TEST_PORT}/bin/statistics.php"; then break; fi
+    if [ "$i" -eq 10 ]; then echo 'Direct-file fixture failed to start'; exit 1; fi
+    sleep 1
+done
+ST_CLI_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TEST_PORT}/bin/statistics.php")
+assert_status 'statistics operator script rejects direct HTTP before bootstrap' 403 "$ST_CLI_STATUS"
+ST_CLI_BODY=$(curl -s "http://localhost:${TEST_PORT}/bin/statistics.php")
+if [ -z "$ST_CLI_BODY" ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); echo 'FAIL: operator script exposed response data'; fi
+
+INB_CLI_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TEST_PORT}/bin/inbox.php")
+assert_status 'inbox operator rejects direct HTTP before bootstrap' 403 "$INB_CLI_STATUS"
+INB_CLI_BODY=$(curl -s "http://localhost:${TEST_PORT}/bin/inbox.php")
+if [ -z "$INB_CLI_BODY" ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); echo 'FAIL: inbox operator exposed data'; fi
+
+GC_CLI_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TEST_PORT}/bin/gift-codes.php")
+assert_status 'gift values operator rejects direct HTTP before bootstrap' 403 "$GC_CLI_STATUS"
+GC_CLI_BODY=$(curl -s "http://localhost:${TEST_PORT}/bin/gift-codes.php")
+if [ -z "$GC_CLI_BODY" ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); echo 'FAIL: gift values operator exposed data'; fi
+
+ACH_CLI_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TEST_PORT}/bin/achievements.php")
+assert_status 'achievements operator rejects direct HTTP before bootstrap' 403 "$ACH_CLI_STATUS"
+ACH_CLI_BODY=$(curl -s "http://localhost:${TEST_PORT}/bin/achievements.php")
+if [ -z "$ACH_CLI_BODY" ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); echo 'FAIL: achievements operator exposed data'; fi
+
+FR_CLI_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TEST_PORT}/bin/friends.php")
+assert_status 'Friends operator rejects direct HTTP before bootstrap' 403 "$FR_CLI_STATUS"
+FR_CLI_BODY=$(curl -s "http://localhost:${TEST_PORT}/bin/friends.php")
+if [ -z "$FR_CLI_BODY" ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); echo 'FAIL: Friends operator exposed data'; fi
+
+GR_CLI_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TEST_PORT}/bin/groups.php")
+assert_status 'Groups operator rejects direct HTTP before bootstrap' 403 "$GR_CLI_STATUS"
+GR_CLI_BODY=$(curl -s "http://localhost:${TEST_PORT}/bin/groups.php")
+if [ -z "$GR_CLI_BODY" ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); echo 'FAIL: Groups operator exposed data'; fi
+
+IT_CLI_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TEST_PORT}/bin/items.php")
+assert_status 'Items operator rejects direct HTTP before bootstrap' 403 "$IT_CLI_STATUS"
+IT_CLI_BODY=$(curl -s "http://localhost:${TEST_PORT}/bin/items.php")
+if [ -z "$IT_CLI_BODY" ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); echo 'FAIL: Items operator exposed data'; fi
+
+SO_CLI_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TEST_PORT}/bin/shared-objects.php")
+assert_status 'Shared Objects operator rejects direct HTTP before bootstrap' 403 "$SO_CLI_STATUS"
+SO_CLI_BODY=$(curl -s "http://localhost:${TEST_PORT}/bin/shared-objects.php")
+MATCH_CLI_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TEST_PORT}/bin/matches.php")
+assert_status "Matches operator CLI is HTTP forbidden" 403 "$MATCH_CLI_STATUS"
+MATCH_CLI_BODY=$(curl -s "http://localhost:${TEST_PORT}/bin/matches.php")
+if [ -z "$MATCH_CLI_BODY" ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); echo 'FAIL: Matches operator exposed data'; fi
+if [ -z "$SO_CLI_BODY" ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); echo 'FAIL: Shared Objects operator exposed data'; fi
+
+SO_RECIPE_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TEST_PORT}/examples/shared_objects_notice.php")
+assert_status 'Trusted Shared Objects recipe rejects HTTP before state/config access' 403 "$SO_RECIPE_STATUS"
+SO_RECIPE_BODY=$(curl -s "http://localhost:${TEST_PORT}/examples/shared_objects_notice.php")
+if [ -z "$SO_RECIPE_BODY" ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); echo 'FAIL: trusted recipe exposed data'; fi
+
+CHAT_CLI_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TEST_PORT}/bin/chat.php")
+assert_status 'Chat unsupported CLI rejects direct HTTP before bootstrap' 403 "$CHAT_CLI_STATUS"
+CHAT_CLI_BODY=$(curl -s "http://localhost:${TEST_PORT}/bin/chat.php")
+if [ -z "$CHAT_CLI_BODY" ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); echo 'FAIL: Chat operator exposed response data'; fi
+
+SO_MIGRATION_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${TEST_PORT}/bin/shared-objects-migrate.php")
+assert_status 'Shared Objects cold migration CLI rejects HTTP before configuration' 403 "$SO_MIGRATION_STATUS"
 
 # ---- Summary ----
 echo ""

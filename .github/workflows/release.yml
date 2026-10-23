@@ -3,6 +3,8 @@ name: CI and Release
 on:
   push:
     branches: [develop, release]
+  pull_request:
+    branches: [develop]
 
 jobs:
   test:

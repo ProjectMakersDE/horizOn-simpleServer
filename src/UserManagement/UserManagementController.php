@@ -70,8 +70,8 @@ class UserManagementController
         $anonymousToken = bin2hex(random_bytes(16)); // 32 char hex token
         $now = Database::now();
 
-        $stmt = $pdo->prepare('INSERT INTO users (id, display_name, anonymous_token, created_at) VALUES (?, ?, ?, ?)');
-        $stmt->execute([$userId, $username, $anonymousToken, $now]);
+        $stmt = $pdo->prepare('INSERT INTO users (id, display_name, anonymous_token, created_at, created_at_millis) VALUES (?, ?, ?, ?, ?)');
+        $stmt->execute([$userId, $username, $anonymousToken, $now, Database::nowMillis()]);
 
         Response::created([
             'userId' => $userId,
@@ -158,8 +158,9 @@ class UserManagementController
         $sessionToken = bin2hex(random_bytes(32)); // 64 char hex token
         $expiresAt = gmdate('Y-m-d\TH:i:s', time() + 86400 * 30); // 30 days
 
-        $stmt = $pdo->prepare('UPDATE users SET session_token = ?, session_expires_at = ? WHERE id = ?');
-        $stmt->execute([$sessionToken, $expiresAt, $user['id']]);
+        $loginMillis = Database::nowMillis();
+        $stmt = $pdo->prepare('UPDATE users SET session_token = ?, session_expires_at = ?, last_login_millis = CASE WHEN last_login_millis IS NULL OR last_login_millis < ? THEN ? ELSE last_login_millis END WHERE id = ?');
+        $stmt->execute([$sessionToken, $expiresAt, $loginMillis, $loginMillis, $user['id']]);
 
         Response::json([
             'userId' => $user['id'],

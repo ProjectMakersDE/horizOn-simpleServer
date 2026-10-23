@@ -21,7 +21,7 @@ set_exception_handler(function (Throwable $e) {
 // CORS headers for all responses
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, X-API-Key, Authorization');
+header('Access-Control-Allow-Headers: Content-Type, X-API-Key, Authorization, If-Match');
 
 // Load core
 $baseDir = __DIR__;
@@ -42,6 +42,17 @@ require_once $baseDir . '/src/Localization/LocalizationController.php';
 require_once $baseDir . '/src/News/NewsController.php';
 require_once $baseDir . '/src/GiftCodes/GiftCodesController.php';
 require_once $baseDir . '/src/PlayerProfile/PlayerProfileController.php';
+require_once $baseDir . '/src/PlayerValues/PlayerValuesController.php';
+require_once $baseDir . '/src/Statistics/StatisticsController.php';
+require_once $baseDir . '/src/Inbox/InboxController.php';
+require_once $baseDir . '/src/Achievements/AchievementController.php';
+require_once $baseDir . '/src/Friends/FriendsController.php';
+require_once $baseDir . '/src/Groups/GroupController.php';
+require_once $baseDir . '/src/Items/ItemController.php';
+require_once $baseDir . '/src/SharedObjects/SharedObjectController.php';
+require_once $baseDir . '/src/Matches/MatchController.php';
+require_once $baseDir . '/src/Chat/ChatController.php';
+require_once $baseDir . '/src/Marketplace/MarketController.php';
 require_once $baseDir . '/src/UserFeedback/UserFeedbackController.php';
 require_once $baseDir . '/src/UserLogs/UserLogsController.php';
 require_once $baseDir . '/src/CrashReporting/CrashReportingController.php';
@@ -80,6 +91,101 @@ if ($request->path() !== $prefix . '/health' && strpos($request->path(), $prefix
     RateLimit::check($request);
 }
 
+// Realtime requires the Cloud gateway. SDKs can detect this before attempting a WebSocket.
+$realtimeUnsupported = function (Request $req) {
+    Response::error('Realtime is available in horizOn Cloud only', 'NOT_SUPPORTED', 501);
+};
+$router->post($prefix . '/realtime/session', $realtimeUnsupported);
+$router->post($prefix . '/realtime/subscriptions', $realtimeUnsupported);
+$router->get($prefix . '/realtime/socket', $realtimeUnsupported);
+
+// --- Chat is hosted-only. Preserve app authentication; never emulate storage or polling. ---
+$router->get($prefix . '/chat/limits', [ChatController::class, 'appUnsupported']);
+$router->post($prefix . '/chat/channels/open', [ChatController::class, 'appUnsupported']);
+$router->post($prefix . '/chat/channels/{id}/sync', [ChatController::class, 'appUnsupported']);
+$router->post($prefix . '/chat/channels/{id}/messages', [ChatController::class, 'appUnsupported']);
+$router->get($prefix . '/chat/operations/{operationId}', [ChatController::class, 'appUnsupported']);
+$router->post($prefix . '/chat/channels/{id}/messages/{messageId}/report', [ChatController::class, 'appUnsupported']);
+
+// These hosted admin paths disclose only the same constant unsupported response.
+// There is no Account-Key authentication/moderation implementation in this edition.
+$chatAdmin = '/api/v1/admin/features/chat/{apiKeyId}';
+foreach (['/config', '/limits', '/channels', '/channels/{id}', '/reports', '/players/{userId}/moderation'] as $chatPath) {
+    $router->get($chatAdmin . $chatPath, [ChatController::class, 'operatorUnsupported']);
+}
+foreach (['/config', '/players/{userId}/moderation'] as $chatPath) {
+    $router->put($chatAdmin . $chatPath, [ChatController::class, 'operatorUnsupported']);
+}
+foreach (['/channels/{id}/messages/{messageId}', '/reports/{id}'] as $chatPath) {
+    $router->delete($chatAdmin . $chatPath, [ChatController::class, 'operatorUnsupported']);
+}
+foreach (['/reports/{id}/resolve', '/cleanup'] as $chatPath) {
+    $router->post($chatAdmin . $chatPath, [ChatController::class, 'operatorUnsupported']);
+}
+
+// --- Inbox: authenticated REST parity, no public operator/admin routes ---
+$router->get($prefix . '/inbox', [InboxController::class, 'get']);
+$router->post($prefix . '/inbox/read', [InboxController::class, 'read']);
+$router->post($prefix . '/inbox/claim', [InboxController::class, 'claim']);
+$router->post($prefix . '/inbox/remove', [InboxController::class, 'remove']);
+
+// --- Friends: explicit player revisions, one atomic bilateral relationship/Inbox scope ---
+$router->get($prefix . '/friends', [FriendsController::class, 'get']);
+$router->get($prefix . '/friends/find', [FriendsController::class, 'find']);
+foreach (FriendsRules::ACTIONS as $friendsAction) {
+    $router->post($prefix . '/friends/' . $friendsAction, static function (Request $req) use ($friendsAction) { FriendsController::change($req, $friendsAction); });
+}
+
+// --- Groups: explicit revisions, guarded membership and same-PDO Inbox transactions ---
+$router->get($prefix . '/groups', [GroupController::class, 'get']);
+$router->post($prefix . '/groups', [GroupController::class, 'create']);
+$router->get($prefix . '/groups/{groupId}', [GroupController::class, 'detail']);
+$router->put($prefix . '/groups/{groupId}', [GroupController::class, 'update']);
+$router->get($prefix . '/groups/{groupId}/members', [GroupController::class, 'members']);
+$router->get($prefix . '/groups/{groupId}/pending', [GroupController::class, 'pending']);
+foreach (GroupRules::ACTIONS as $groupAction) {
+    $router->post($prefix . '/groups/{groupId}/' . $groupAction, static function (Request $req) use ($groupAction) { GroupController::change($req,$groupAction); });
+}
+
+// --- Items: explicit inventory CAS, paged catalog and no public grant/admin route ---
+$router->get($prefix . '/items', [ItemController::class, 'get']);
+$router->get($prefix . '/items/catalog', [ItemController::class, 'catalog']);
+$router->post($prefix . '/items/adjust', [ItemController::class, 'adjust']);
+$router->post($prefix . '/items/equip', [ItemController::class, 'equip']);
+$router->post($prefix . '/items/discard', [ItemController::class, 'discard']);
+
+// --- Shared Objects: opaque bytes, bounded metadata pages, exact If-Match and no public admin/grant route ---
+$router->get($prefix . '/shared-objects/collections', [SharedObjectController::class, 'collections']);
+$router->get($prefix . '/shared-objects/{collection}/usage', [SharedObjectController::class, 'usage']);
+$router->get($prefix . '/shared-objects/{collection}/objects/{objectId}', [SharedObjectController::class, 'get']);
+$router->post($prefix . '/shared-objects/{collection}/query', [SharedObjectController::class, 'queryObjects']);
+$router->post($prefix . '/shared-objects/{collection}/objects', [SharedObjectController::class, 'create']);
+$router->put($prefix . '/shared-objects/{collection}/objects/{objectId}', [SharedObjectController::class, 'update']);
+$router->delete($prefix . '/shared-objects/{collection}/objects/{objectId}', [SharedObjectController::class, 'delete']);
+
+// --- User Management ---
+// Matches: ordinary REST only; both ranked validation and realtime remain cloud capabilities.
+// Marketplace: ordinary REST parity; operator administration remains local CLI only.
+$router->get($prefix . '/marketplace/limits', [MarketController::class, 'limits']);
+$router->get($prefix . '/marketplace/rules', [MarketController::class, 'rules']);
+$router->get($prefix . '/marketplace', [MarketController::class, 'state']);
+$router->get($prefix . '/marketplace/listings', [MarketController::class, 'search']);
+$router->get($prefix . '/marketplace/listings/{id}', [MarketController::class, 'get']);
+$router->get($prefix . '/marketplace/operations/{operationId}', [MarketController::class, 'operation']);
+$router->post($prefix . '/marketplace/listings', [MarketController::class, 'create']);
+$router->post($prefix . '/marketplace/listings/{id}/buy', [MarketController::class, 'buy']);
+$router->post($prefix . '/marketplace/listings/{id}/cancel', [MarketController::class, 'cancel']);
+$router->post($prefix . '/marketplace/listings/{id}/retry-return', [MarketController::class, 'retryReturn']);
+
+$router->get($prefix . '/matches', [MatchController::class, 'mine']);
+$router->get($prefix . '/matches/limits', [MatchController::class, 'limits']);
+$router->get($prefix . '/matches/open', [MatchController::class, 'open']);
+$router->get($prefix . '/matches/{id}', [MatchController::class, 'get']);
+$router->post($prefix . '/matches', [MatchController::class, 'create']);
+$router->post($prefix . '/matches/{id}/result', [MatchController::class, 'result']);
+$router->post($prefix . '/matches/{id}/ranked-run', [MatchController::class, 'rankedRun']);
+$router->post($prefix . '/matches/{id}/{action}', [MatchController::class, 'action']);
+
 // --- User Management ---
 $router->post($prefix . '/user-management/signup', [UserManagementController::class, 'signup']);
 $router->post($prefix . '/user-management/signin', [UserManagementController::class, 'signin']);
@@ -115,6 +221,22 @@ $router->post($prefix . '/gift-codes/redeem', [GiftCodesController::class, 'rede
 // --- Player Profile (needs the player's Bearer session) ---
 $router->get($prefix . '/player-profile', [PlayerProfileController::class, 'get']);
 $router->put($prefix . '/player-profile', [PlayerProfileController::class, 'set']);
+
+// --- Player Values (Bearer session, exact integers, stable operation IDs) ---
+$router->get($prefix . '/player-values', [PlayerValuesController::class, 'get']);
+$router->get($prefix . '/player-values/offers', [PlayerValuesController::class, 'offers']);
+$router->post($prefix . '/player-values/purchase', [PlayerValuesController::class, 'purchase']);
+$router->post($prefix . '/player-values/adjust', [PlayerValuesController::class, 'adjust']);
+
+// --- Statistics: one explicit atomic session batch, matching Bearer required ---
+$router->get($prefix . '/statistics/definitions', [StatisticsController::class, 'definitions']);
+$router->get($prefix . '/statistics', [StatisticsController::class, 'get']);
+$router->post($prefix . '/statistics', [StatisticsController::class, 'update']);
+
+// --- Achievements: player-owned snapshots, explicit manual unlock and bounded Inbox handoff ---
+$router->get($prefix . '/achievements', [AchievementController::class, 'get']);
+$router->post($prefix . '/achievements/unlock', [AchievementController::class, 'unlock']);
+$router->post($prefix . '/achievements/rewards/deliver', [AchievementController::class, 'deliver']);
 
 // --- User Feedback ---
 $router->post($prefix . '/user-feedback/submit', [UserFeedbackController::class, 'submit']);

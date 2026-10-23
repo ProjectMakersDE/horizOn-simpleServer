@@ -1,5 +1,8 @@
 -- horizOn Simple Server - MySQL Schema
 
+CREATE TABLE IF NOT EXISTS achievement_catalog (id INT PRIMARY KEY, data MEDIUMTEXT NOT NULL)
+    ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS users (
     id CHAR(36) PRIMARY KEY,
     display_name VARCHAR(30) NOT NULL,
@@ -13,8 +16,15 @@ CREATE TABLE IF NOT EXISTS users (
     frame_id VARCHAR(32) NULL,
     badges TEXT NULL,
     unlocks TEXT NULL,
+    created_at_millis BIGINT NULL,
+    last_login_millis BIGINT NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_users_apple_user_id (apple_user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS achievement_state (
+    user_id CHAR(36) PRIMARY KEY, revision BIGINT NOT NULL, data MEDIUMTEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS leaderboard (
@@ -58,8 +68,15 @@ CREATE TABLE IF NOT EXISTS gift_codes (
     code VARCHAR(50) UNIQUE NOT NULL,
     reward_type VARCHAR(50) NOT NULL DEFAULT '',
     reward_data TEXT,
+    values_json TEXT,
     max_redemptions INT NOT NULL DEFAULT 1,
-    current_redemptions INT NOT NULL DEFAULT 0,
+    current_redemptions BIGINT NOT NULL DEFAULT 0,
+    v2_id BINARY(16),
+    protocol_version TINYINT NOT NULL DEFAULT 2,
+    config_revision BIGINT NOT NULL DEFAULT 1,
+    max_per_user INT DEFAULT 1,
+    unlimited_total TINYINT NOT NULL DEFAULT 0,
+    migration_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
     expires_at DATETIME,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -69,10 +86,26 @@ CREATE TABLE IF NOT EXISTS gift_code_redemptions (
     gift_code_id CHAR(36) NOT NULL,
     user_id CHAR(36) NOT NULL,
     redeemed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    idempotency_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL,
+    gift_data TEXT,
+    granted_values TEXT,
+    value_granted_at BIGINT NULL,
     FOREIGN KEY (gift_code_id) REFERENCES gift_codes(id),
     FOREIGN KEY (user_id) REFERENCES users(id),
     UNIQUE KEY unique_redemption (gift_code_id, user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- One constant row serializes explicit campaign identity creation/migration, never player state.
+CREATE TABLE IF NOT EXISTS gift_code_identity_lock (id TINYINT PRIMARY KEY);
+
+-- Permanent compact source guard; intentionally survives campaign/user row deletion.
+CREATE TABLE IF NOT EXISTS gift_code_counts (
+    campaign_id BINARY(16) NOT NULL,
+    player_id BINARY(16) NOT NULL,
+    count BIGINT NOT NULL,
+    PRIMARY KEY(campaign_id,player_id),
+    CHECK(count>=0)
+) ENGINE=InnoDB;
 
 -- Player profile cosmetics catalog (one per installation), filled by SQL.
 -- cosmetic_id: 1 to 32 characters a-z 0-9 . _ - (starts with a letter or digit)
@@ -190,3 +223,120 @@ CREATE TABLE IF NOT EXISTS email_queue (
     FOREIGN KEY (template_id) REFERENCES email_templates(id),
     FOREIGN KEY (user_id) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- TASK-1004: bounded server-owned balances and a separate offer catalogue.
+CREATE TABLE IF NOT EXISTS player_values_config (
+    id TINYINT PRIMARY KEY, revision BIGINT NOT NULL,
+    definitions MEDIUMTEXT NOT NULL, known_keys TEXT NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS player_value_offers (
+    offer_key VARCHAR(24) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY, data TEXT NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS player_values (
+    user_id CHAR(36) PRIMARY KEY, data MEDIUMTEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- TASK-1005: one bounded catalog and one statistics document per player.
+CREATE TABLE IF NOT EXISTS statistics_catalog (
+    id TINYINT PRIMARY KEY, version BIGINT NOT NULL, definitions MEDIUMTEXT NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS statistics_state (
+    user_id CHAR(36) PRIMARY KEY, data MEDIUMTEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Bounded JSON rows may exceed64KiB at500 broadcasts/markers.
+CREATE TABLE IF NOT EXISTS inbox_catalog (id INT PRIMARY KEY, data MEDIUMTEXT NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS inbox_state (user_id CHAR(36) PRIMARY KEY, data MEDIUMTEXT NOT NULL,next_expiry BIGINT NULL,INDEX idx_inbox_expiry(next_expiry,user_id),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Nullable active pointers and reverse references retain bounded/resumable deletion anchors.
+CREATE TABLE IF NOT EXISTS friends_state (
+    user_id CHAR(36) PRIMARY KEY, active_user_id CHAR(36) NULL, revision BIGINT NOT NULL,
+    friends TEXT NOT NULL, incoming TEXT NOT NULL, outgoing TEXT NOT NULL, blocked TEXT NOT NULL,
+    INDEX idx_friends_deleted(active_user_id,user_id),
+    FOREIGN KEY(active_user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS friends_references (
+    owner_user_id CHAR(36) NOT NULL, related_user_id CHAR(36) NOT NULL,
+    PRIMARY KEY(owner_user_id,related_user_id),
+    INDEX idx_friends_related(related_user_id,owner_user_id),
+    FOREIGN KEY(owner_user_id) REFERENCES friends_state(user_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Explicit connection-bound groups; player state is a permanent revision/deletion anchor.
+CREATE TABLE IF NOT EXISTS groups_state (id CHAR(36) PRIMARY KEY, revision BIGINT NOT NULL, data MEDIUMTEXT NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS player_groups (
+    user_id CHAR(36) PRIMARY KEY, active_user_id CHAR(36) NULL, revision BIGINT NOT NULL, data TEXT NOT NULL,
+    INDEX idx_groups_deleted(active_user_id,user_id), FOREIGN KEY(active_user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS group_members (
+    group_id CHAR(36) NOT NULL, user_id CHAR(36) NOT NULL, role VARCHAR(7) NOT NULL, joined_millis BIGINT NOT NULL,
+    PRIMARY KEY(group_id,user_id), INDEX idx_group_members_player(user_id,group_id), INDEX idx_group_succession(group_id,role,joined_millis,user_id),
+    FOREIGN KEY(group_id) REFERENCES groups_state(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS group_pending_references (
+    user_id CHAR(36) NOT NULL, group_id CHAR(36) NOT NULL, target_kind TINYINT NULL, PRIMARY KEY(user_id,group_id),
+    INDEX idx_group_pending_group(group_id,user_id), FOREIGN KEY(group_id) REFERENCES groups_state(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Reserved catalog identities, bounded pages and same-PDO inventory grants.
+CREATE TABLE IF NOT EXISTS item_catalog (id INT PRIMARY KEY, revision BIGINT NOT NULL, total INT NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS item_templates (item_key VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY, data TEXT NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS player_items (
+    user_id CHAR(36) PRIMARY KEY, revision BIGINT NOT NULL, data MEDIUMTEXT NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Immutable item bases and stable UInt16 template identities. Existing data is not backfilled.
+CREATE TABLE IF NOT EXISTS item_storage_catalog(id INT PRIMARY KEY,next_slot INT NOT NULL,next_version BIGINT NOT NULL) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS item_bases(version BIGINT PRIMARY KEY,slot INT NOT NULL,data TEXT NOT NULL,shape BINARY(32) NOT NULL,ref_count BIGINT NOT NULL,INDEX idx_item_basis_shape(slot,shape,version)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS item_template_storage(item_key VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY,slot INT NOT NULL UNIQUE,version BIGINT NOT NULL) ENGINE=InnoDB;
+
+-- Shared Objects: schema bootstrap is explicit in SharedObjectSchema (legacy data is never converted here).
+
+-- Matches metadata and bytes have independent revisions; player revisions survive ordinary leave.
+CREATE TABLE IF NOT EXISTS matches_state (
+ id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY, revision BIGINT NOT NULL, store_revision BIGINT NOT NULL,
+ payload_revision BIGINT NOT NULL, payload_bytes INT NOT NULL, creator_id CHAR(36) NOT NULL,
+ status VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL, visibility VARCHAR(8) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+ strength BIGINT NOT NULL, open_for_join TINYINT NOT NULL, lobby_deadline BIGINT NOT NULL, due_millis BIGINT NOT NULL,
+ data TEXT NOT NULL, summary TEXT NOT NULL,
+ INDEX idx_matches_open(open_for_join,strength,id), INDEX idx_matches_status(status,id), INDEX idx_matches_due(due_millis,id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS match_payloads (
+ id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY, revision BIGINT NOT NULL, payload BLOB NOT NULL,
+ FOREIGN KEY(id) REFERENCES matches_state(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS player_matches (
+ user_id CHAR(36) PRIMARY KEY, active_user_id CHAR(36) NULL, revision BIGINT NOT NULL, data TEXT NOT NULL, cleanup_after CHAR(36) NULL,
+ INDEX idx_matches_deleted(active_user_id,user_id), FOREIGN KEY(active_user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS match_config (id INT PRIMARY KEY, revision BIGINT NOT NULL, board_key VARCHAR(128) NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS match_maintenance (
+ kind VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY, revision BIGINT NOT NULL, cutoff_millis BIGINT NOT NULL,
+ after_due BIGINT NULL, after_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Marketplace: indexed metadata plus original item and listing operations; no cascading escrow deletion.
+CREATE TABLE IF NOT EXISTS market_header(id INT PRIMARY KEY,version BIGINT NOT NULL,revision BIGINT NOT NULL,data TEXT NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS market_rules(item_key VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY,data TEXT NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS player_market(user_id CHAR(36) PRIMARY KEY,active_user_id CHAR(36) NULL,revision BIGINT NOT NULL,data MEDIUMTEXT NOT NULL,
+ INDEX idx_market_deleted(active_user_id,user_id),FOREIGN KEY(active_user_id) REFERENCES users(id) ON DELETE SET NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS market_listings(id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY,revision BIGINT NOT NULL,
+ status VARCHAR(24) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,item_key VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+ price BIGINT NOT NULL,created_millis BIGINT NOT NULL,due_kind INT NOT NULL,due_millis BIGINT NOT NULL,return_owner CHAR(36) NOT NULL,
+ create_actor CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,create_operation CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,
+ close_actor CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,close_operation CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,return_entry VARCHAR(46) CHARACTER SET ascii COLLATE ascii_bin NULL,INDEX idx_market_inbox_return(return_owner,return_entry),data TEXT NOT NULL,
+ INDEX idx_market_price(status,price,id),INDEX idx_market_item_price(status,item_key,price,id),INDEX idx_market_admin(created_millis,id),
+ INDEX idx_market_admin_status(status,created_millis,id),INDEX idx_market_due(due_kind,due_millis,id),INDEX idx_market_owner(return_owner,id),
+ UNIQUE INDEX idx_market_create_operation(create_actor,create_operation),UNIQUE INDEX idx_market_close_operation(close_actor,close_operation)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS market_maintenance(kind VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY,revision BIGINT NOT NULL,data TEXT NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Request identity index only, no duplicated pending payload or player list.
+CREATE TABLE IF NOT EXISTS group_inbox_sources(request_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY,group_id CHAR(36) NOT NULL,INDEX idx_group_inbox_group(group_id,request_id),FOREIGN KEY(group_id) REFERENCES groups_state(id) ON DELETE CASCADE) ENGINE=InnoDB;
+
+-- One project migration fence; no player/source payload copy.
+CREATE TABLE IF NOT EXISTS group_storage(id INT PRIMARY KEY,revision BIGINT NOT NULL,cursor_group CHAR(36) NULL,ready TINYINT NOT NULL) ENGINE=InnoDB;
