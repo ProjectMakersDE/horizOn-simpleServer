@@ -1,3 +1,56 @@
+# [1.5.0](https://github.com/ProjectMakersDE/horizOn-simpleServer/compare/v1.4.0...v1.5.0) (2026-10-23)
+
+
+### Bug Fixes
+
+* **achievements:** bind legacy messages to original achievement key ([7106d7d](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/7106d7dc77b89eada047665fb73337acd246a356))
+* **achievements:** preserve explicit null reward rejection ([16e4ad8](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/16e4ad8268a3c6057e701379deb0a503a3d76cac))
+* **chat:** expose explicit hosted-only capability boundary ([60a2d66](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/60a2d6641f59c16e139ee87cb0f87aa991cadda2))
+* **chat:** isolate database-free CLI test from PHP module setup ([21586bc](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/21586bc29bd2c5cef1160e8ba14e9d46bb67b05d))
+* finish SQLite transactions on supported PHP versions (TASK-1004) ([3a3a2d6](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/3a3a2d6d4b3e249253258c5ddf453a076a59e2f8))
+* **gift-codes:** inspect SQLite through an existing read-only database ([4762af3](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/4762af3bed329bad21e339f2d2524ac5b3b647d2))
+* **gift-codes:** keep retired campaign counter identities reserved ([0416bc7](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/0416bc74eb3bb2797aba66ba7917db3529dc9bf5))
+* **gift-codes:** reject redundant UUID aliases without warnings ([ee3f97d](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/ee3f97d6ac1c52f12fd1afe7b289b0ce78313580))
+* **inbox:** verify legacy value receipts before claiming and retain compact guards ([fe6c18b](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/fe6c18b2f041b4b34c72c0d48eb387e4b33aec6d))
+* **json:** keep large string tokenization fail closed ([3c8c85f](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/3c8c85f25665d80ab795e6388cac721616a30120))
+* **marketplace:** honor operator quotas and batch retained reads ([00127fe](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/00127fe3dd667d74396206314522539e324e59b1))
+* **marketplace:** keep operation replay metadata on listings ([a2f6a43](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/a2f6a4355c65086d9aa09869482033f76deafec0))
+* **marketplace:** probe retained operations in index checks ([854ecd8](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/854ecd8748e07c201159568cca7d3e149c6ef03e))
+* **matches:** preserve oversized SQLite completions ([a8c822b](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/a8c822bd759c2cd6c76bf18e14e21f36aa79de78))
+* **matches:** reserve exact player completion frame ([34196a3](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/34196a3fef295bd3599b68962438bf82e0919b09))
+* **player-values:** accept configured multi-value mutations ([e73eb77](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/e73eb7788a6f3d313574c9b06ce6c66e415893c1))
+* **player-values:** share current catalog and offer read locks ([8719121](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/8719121bac7d339f3a6b6440fdf8a24e57e0d24f))
+* **player-values:** use current catalog in active MySQL transactions ([5102bfe](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/5102bfe0c1865f5f63b601076fa87d1651050714))
+* **readme:** name the simpleServer cloud save limit as a self-hosting value and point to the plan limits of horizOn Cloud (TASK-1046) ([759abf1](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/759abf105bdfbecc7c5e037f5570209732d2a967))
+* **shared-objects:** bind cold recovery to the sealed source plan ([10b5e55](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/10b5e5569867c578e8fd95a41768b72bea57db34))
+* verify supported PHP runtimes before Develop merges ([d807d6f](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/d807d6f0e14fa96d46e4848257dd384f4c1c8849))
+
+
+### Features
+
+* **achievements:** atomically unlock progress and retain inbox rewards ([13108db](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/13108dbb6c8f13ec9fafe354e81d03d4107aaab3))
+* **achievements:** store compact unlocks and grant rewards atomically ([6b3941f](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/6b3941fca94d7091fbc56d87ae6d7b76b68ec4a3))
+* add atomic player values with SQLite and MySQL parity (TASK-1004) ([80f0b69](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/80f0b693995833697dcaf28bc51dafd6fab8b03f))
+* add atomic statistics REST parity for SQLite and MySQL ([990d3d4](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/990d3d450ee29f07f529ca3b4ef3dcfc6ac7543d))
+* add bounded asynchronous matches with atomic turn notices ([54a999d](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/54a999d85b51c4ec13b4781263ca1b9202ff7c17))
+* **friends:** add atomic session-bound relationship REST APIs ([62c9f2d](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/62c9f2d597ba01fc4694784bb0ae0f7a242c82c5))
+* **friends:** compact SQL relations and honor operator quotas ([d1f7970](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/d1f79704a63a28ac7987dbdcb683f0089ee67e21))
+* **gift-codes:** atomically redeem configured player value rewards ([845811a](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/845811aa72f864b7c3a5dbe59e88ee29990b5056))
+* **gift-codes:** persist V2 sequence guards and verified source migration ([846636f](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/846636f3eecbc7b7cf41b58ad50aa3f840706aaa))
+* **groups:** add transactional self-hosted REST parity ([0209b71](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/0209b7163eb0c19a4cc313ef705bb4120bfbcb49))
+* **groups:** compact SQL quota state and configurable group policy ([5124e6a](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/5124e6ab19cf36c0aced1735a95cd647303ef937))
+* **inbox:** add bounded REST inbox with atomic value claims ([377d448](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/377d448ea86e8db7170be6568c29dcbf8bb70cc8))
+* **inbox:** store compact source references and stable broadcast statuses ([ac726b3](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/ac726b3a43a3d743905d31fc7ba9584714ef3bba))
+* **items:** add bounded inventory and atomic paid grants ([d80ce38](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/d80ce38ac5e2acf0fff856658277c0d983f519c1))
+* **items:** share immutable bases and store instance deltas ([3214cd5](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/3214cd5e2fb651506cbd66108cac6f62d3fd725a))
+* **marketplace:** preserve original items through atomic trades and returns ([9726488](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/97264887f511bb6d9e54ca5f994766db636a9a34))
+* **matches:** compact state and separate retention quotas ([536352b](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/536352bfd5ef511c7ad3b0b8eb541ec2ad209187))
+* **player-values:** compact SQL state and honor operator quotas ([92706f3](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/92706f33f65513c5d46775f8e232533829d60969))
+* **realtime:** report explicit Cloud-only capability (TASK-995) ([4e96a00](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/4e96a00a3cb53a53f09412210b3f11c5b3a5f7de))
+* **shared-objects:** add bounded self-hosted object storage ([f4ded77](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/f4ded77dbba2baa4e43d1f0e619d120ad26eab33))
+* **shared-objects:** compact SQL storage and honor operator limits ([f1f532b](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/f1f532b59ea192c91c682235a22e307d0ca69de3))
+* **statistics:** store compact counters with configurable definitions ([#21](https://github.com/ProjectMakersDE/horizOn-simpleServer/issues/21)) ([fd867f8](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/fd867f8c605790be79097bdda4b5e0dc0af99632))
+
 # [1.4.0](https://github.com/ProjectMakersDE/horizOn-simpleServer/compare/v1.3.1...v1.4.0) (2026-10-11)
 
 
