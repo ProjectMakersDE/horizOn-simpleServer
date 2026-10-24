@@ -14,6 +14,18 @@ jobs:
       matrix:
         php-version: ['7.4', '8.2']
 
+    # Disposable MySQL for the migration import test. The password is a throwaway CI value.
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: horizon-ci
+          MYSQL_DATABASE: task691_0c1
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -phorizon-ci"
+          --health-interval=5s --health-timeout=5s --health-retries=24
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -25,6 +37,13 @@ jobs:
 
       - name: Run integration tests
         run: bash tests/test.sh
+
+      - name: Run migration import test on MySQL
+        run: php tests/migration-import.php
+        env:
+          HORIZON_MIGRATION_TEST_DSN: mysql:host=127.0.0.1;port=3306;dbname=task691_0c1;charset=utf8mb4
+          HORIZON_MIGRATION_TEST_USER: root
+          HORIZON_MIGRATION_TEST_PASSWORD: horizon-ci
 
   release:
     runs-on: ubuntu-latest

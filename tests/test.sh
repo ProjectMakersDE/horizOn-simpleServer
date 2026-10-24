@@ -980,6 +980,7 @@ if php tests/gift-code-values.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 
 if php tests/gift-code-migration.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 if php tests/gift-code-cli.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 if php tests/gift-code-storage.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
+if php tests/migration-import.php; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 # The SDK preflight must distinguish an unsupported gateway from a transient transport error.
 REALTIME_RESP=$(curl -s -w "\n%{http_code}" "$BASE_URL/realtime/session" \
     -X POST -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" -d '{}')
