@@ -340,3 +340,10 @@ CREATE TABLE IF NOT EXISTS group_inbox_sources(request_id CHAR(36) CHARACTER SET
 
 -- One project migration fence; no player/source payload copy.
 CREATE TABLE IF NOT EXISTS group_storage(id INT PRIMARY KEY,revision BIGINT NOT NULL,cursor_group CHAR(36) NULL,ready TINYINT NOT NULL) ENGINE=InnoDB;
+
+-- One row per imported horizOn migration file (bin/migration-import.php): blocks a second import of the same file.
+CREATE TABLE IF NOT EXISTS project_migrations (
+    migration_id CHAR(36) PRIMARY KEY,
+    imported_at DATETIME NOT NULL,
+    summary TEXT NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

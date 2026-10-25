@@ -158,6 +158,7 @@ All configuration is done via the `.env` file. Copy `.env.example` to `.env` and
 | `APPLE_TEAM_ID` | *(empty)* | 10-character Apple Team ID |
 | `APPLE_SERVICE_ID` | *(empty)* | Apple Services ID — used as `aud` for web logins |
 | `APPLE_BUNDLE_ID` | *(empty)* | Apple Bundle ID — used as `aud` for native iOS logins |
+| `MIGRATION_IMPORT_MAX_BYTES` | `33554432` | Maximum size of `horizon-migration.json` for `bin/migration-import.php` |
 
 ## API Endpoints
 
@@ -729,6 +730,48 @@ SQLite requires zero configuration. The database file is created automatically a
 
 3. The schema is applied automatically on first request using `migrations/mysql.sql`.
 
+## Moving a Project from horizOn BaaS
+
+In the horizOn dashboard, open **API Keys**, choose one project and download
+`horizon-migration.json`. The file holds the content of exactly that project. Import
+it on the command line of your Simple Server, never through a web endpoint:
+
+```bash
+php bin/migration-import.php /path/to/horizon-migration.json --dry-run
+php bin/migration-import.php /path/to/horizon-migration.json
+```
+
+The dry run checks the whole file and the target and prints what would be imported,
+transformed and skipped, without writing. The import writes everything in one
+transaction: a failure leaves the database unchanged. The output contains counts and
+reasons only, never the content.
+
+**What moves (format version 1)**
+
+| Content | Result | Mapping and limits |
+|---|---|---|
+| Remote Config | complete | One row per key. The key `smtp_config` is never exported or imported. Keys over 256 characters or values over 64 KiB are skipped. |
+| Localization | complete | One row per key and language, 15 languages. Keys over 100 characters are skipped. |
+| News | transformed | Only published news. One news item becomes one row per language. A language with a missing title or message, or a title over 200 characters, is skipped. |
+| Gift codes | transformed | Usable codes only (not revoked, deactivated or expired). Code, reward data, expiry and limits move, redemption counters start at 0. Codes that reward player values or grant cosmetics are skipped, because those catalogs are not part of version 1. |
+| Email templates | transformed | Slug, name, subject, body and variables move. The sender address and name stay behind, the Simple Server sends with the sender of its SMTP configuration. |
+| Players, logins, cloud saves, leaderboards, redemptions, feedback, logs, crash reports | not supported | Players start fresh and sign in again. Email, password and Google logins do not exist on the Simple Server, and sessions cannot move. |
+| Achievements, statistics, items, cosmetics, player values | not supported | Set them up with SQL or the `bin/` tools. |
+| API keys, SMTP, Apple, Google and AI credentials | not supported | Never exported. Configure them again in `.env` and `smtp_config`. |
+
+**Rules of the import**
+
+- Only format version 1 is accepted. A different version, a broken structure, an
+  unknown language, a duplicate record or the key `smtp_config` rejects the file
+  before the database is opened.
+- The target must be empty for Remote Config (apart from `smtp_config`), localization,
+  news, gift codes and email templates. Import into a fresh installation.
+- Every file carries a `migrationId`. The table `project_migrations` records it, and the
+  same file is never imported twice. To import again, start from a fresh database.
+- `MIGRATION_IMPORT_MAX_BYTES` limits the file size (default 32 MiB).
+- Exit codes: `0` done, `2` file rejected, `4` target not empty or file already imported,
+  `3` other failure.
+
 ## Running Tests
 
 An integration test script is included that starts a temporary PHP server, runs curl tests across the core endpoint groups, and reports results:
@@ -769,6 +812,7 @@ horizOn-simpleServer/
 │   ├── GiftCodes/
 │   ├── Leaderboard/
 │   ├── Localization/
+│   ├── Migration/            # horizon-migration.json import (bin/migration-import.php)
 │   ├── News/
 │   ├── PlayerProfile/
 │   ├── RemoteConfig/
