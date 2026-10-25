@@ -1,0 +1,54 @@
+{
+  "format": "horizon-migration",
+  "formatVersion": 1,
+  "source": { "system": "horizon-baas", "schema": "project-content-v1" },
+  "migrationId": "0b6f0d4e-5a8c-4c1e-9d2a-7f3b1c9e4a10",
+  "exportedAt": "2026-10-24T12:00:00Z",
+  "project": { "apiKeyId": "6a1f4c2e-9b7d-4e3a-8c5f-2d0e1b9a7c33", "name": "Seagull Storm" },
+  "counts": { "remoteConfig": 2, "localization": 2, "news": 2, "giftCodes": 4, "emailTemplates": 1 },
+  "data": {
+    "remoteConfig": [
+      { "key": "difficulty", "value": "hard" },
+      { "key": "spawn_rate", "value": "{\"base\":1.5}" }
+    ],
+    "localization": [
+      { "key": "menu.play", "translations": { "de": "Spielen", "en": "Play" } },
+      { "key": "menu.quit", "translations": { "en": "Quit" } }
+    ],
+    "news": [
+      {
+        "id": "1d9c6b3a-2f4e-4a8b-9c1d-5e7f3a2b8c40",
+        "releaseDate": "2026-10-23T12:00:00Z",
+        "titles": { "de": "Patch 1.2", "en": "Patch 1.2" },
+        "messages": { "de": "Neue Level", "en": "New levels" }
+      },
+      {
+        "id": "2e0d7c4b-3a5f-4b9c-8d2e-6f8a4b3c9d51",
+        "releaseDate": "2026-10-20T08:30:00Z",
+        "titles": { "en": "Welcome", "fr": "Bienvenue" },
+        "messages": { "en": "Thanks for playing" }
+      }
+    ],
+    "giftCodes": [
+      { "code": "LAUNCH", "giftData": "{\"gold\":100}", "values": [], "expiresAt": "2026-11-23T12:00:00Z", "maxTotalRedemptions": 100, "maxRedemptionsPerUser": 1 },
+      { "code": "UNLIMITED", "giftData": "{}", "values": [], "expiresAt": null, "maxTotalRedemptions": null, "maxRedemptionsPerUser": null },
+      { "code": "GOLDPACK", "giftData": "{}", "values": [{ "key": "gold", "amount": 500 }], "expiresAt": null, "maxTotalRedemptions": 10, "maxRedemptionsPerUser": 1 },
+      { "code": "AVATAR", "giftData": "{\"grants\":[\"avatar.gull\"]}", "values": [], "expiresAt": null, "maxTotalRedemptions": 10, "maxRedemptionsPerUser": 1 }
+    ],
+    "emailTemplates": [
+      {
+        "slug": "welcome",
+        "name": "Welcome",
+        "subject": { "de": "Hallo {{name}}", "en": "Hi {{name}}" },
+        "body": { "de": "Willkommen {{name}}", "en": "Welcome {{name}}" },
+        "variables": ["name"]
+      }
+    ]
+  },
+  "excluded": [
+    { "type": "players", "count": null, "reason": "Players, sessions and logins are not part of V1", "impact": "Players sign in again." }
+  ],
+  "warnings": [
+    { "type": "giftCodes", "ref": "LAUNCH", "reason": "7 redemptions are not migrated", "impact": "The redemption counter starts at 0." }
+  ]
+}
