@@ -1,3 +1,10 @@
+# [1.7.0](https://github.com/ProjectMakersDE/horizOn-simpleServer/compare/v1.6.0...v1.7.0) (2026-11-15)
+
+
+### Features
+
+* **matches:** limit open matches per installation ([7b3c6d7](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/7b3c6d77311d3cc91fa61531b790c213894e57e8))
+
 # [1.6.0](https://github.com/ProjectMakersDE/horizOn-simpleServer/compare/v1.5.0...v1.6.0) (2026-10-25)
 
 
