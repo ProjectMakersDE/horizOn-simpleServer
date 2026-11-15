@@ -16,6 +16,8 @@ class MatchRules
     public const STATE_FRAME=65535;
     public const STATUSES=['lobby','active','reporting','confirmed','disputed','unconfirmed','cancelled'];
     public const TERMINAL=['confirmed','disputed','unconfirmed','cancelled'];
+    /** Statuses that hold one slot of the installation-wide open match counter. */
+    public const OPEN=['lobby','active','reporting'];
     public const ACTIONS=['join','decline','start','turn','timeout','leave','cancel'];
     public static function fail(string $code,int $status=409): void{throw new MatchFailure($code,$status);}
     public static function invalid(): void{self::fail('INVALID_REQUEST',400);}
@@ -45,6 +47,9 @@ class MatchRules
         $v=self::limits('ENTERPRISE');$fields=['activeMatches'=>'ACTIVE','stateBytes'=>'STATE_BYTES','retainedMatches'=>'RETAINED','pendingInvites'=>'PENDING_INVITES','settlementMatches'=>'SETTLEMENT','historyRetentionSeconds'=>'HISTORY_RETENTION_SECONDS','rankedSettlementSeconds'=>'RANKED_SETTLEMENT_SECONDS'];
         foreach($fields as $field=>$suffix)$v[$field]=Config::operatorLimit('MATCHES_'.$suffix,$v[$field],$field==='stateBytes'?self::STATE_FRAME:2147483647,in_array($field,['retainedMatches','historyRetentionSeconds'],true)?0:1);return $v;
     }
+    /** Open matches (lobby, active, reporting) of the installation. Enforced on create only and never part of the public limits object. */
+    public static function accountOpenLimit(?string $tier=null):int
+    {$tiers=['FREE'=>100,'BASIC'=>500,'PLUS'=>1000,'PRO'=>2500,'ENTERPRISE'=>10000];if($tier!==null){if(!isset($tiers[$tier]))self::invalid();return $tiers[$tier];}return Config::operatorLimit('MATCHES_ACCOUNT_OPEN',$tiers['ENTERPRISE']);}
     public static function validateLimits(array $v):void
     {foreach(self::limits('ENTERPRISE') as $field=>$unused)self::integer($v[$field]??null,in_array($field,['retainedMatches','historyRetentionSeconds'],true)?0:1,$field==='stateBytes'?self::STATE_FRAME:2147483647);}
     public static function create($raw,array $limits): array
