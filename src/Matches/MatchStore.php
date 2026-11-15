@@ -65,6 +65,12 @@ class MatchStore
     public function config(bool $lock=false): array{$r=$this->one('SELECT revision,board_key FROM match_config WHERE id=1',[],$lock);return$r===null?['revision'=>0,'rankedLeaderboardKey'=>null,'exists'=>false]:['revision'=>(int)$r['revision'],'rankedLeaderboardKey'=>$r['board_key'],'exists'=>true];}
     public function saveConfig(array $before,?string $key): array
     {$revision=MatchRules::next($before['revision']);if(!$before['exists'])$this->pdo->prepare('INSERT INTO match_config(id,revision,board_key) VALUES(1,?,?)')->execute([$revision,$key]);else{$q=$this->pdo->prepare('UPDATE match_config SET revision=?,board_key=? WHERE id=1 AND revision=?');$q->execute([$revision,$key,$before['revision']]);if($q->rowCount()!==1)MatchRules::fail('STATE_CONFLICT');}return['revision'=>$revision,'rankedLeaderboardKey'=>$key];}
+    /** Installation-wide open match counter; null until the first status change backfills it. */
+    public function openCounter(bool $lock=false): ?array{$r=$this->one('SELECT revision,open_count FROM match_open_counter WHERE id=1',[],$lock);return$r===null?null:['revision'=>MatchStorage::sqlNumber($r['revision']),'open'=>MatchStorage::sqlNumber($r['open_count'])];}
+    /** One-time backfill only: counts stored matches through the status index. */
+    public function countOpen(): int{$q=$this->pdo->prepare('SELECT COUNT(*) FROM matches_state'.($this->mysql?' FORCE INDEX (idx_matches_status)':' INDEXED BY idx_matches_status').' WHERE status IN ('.implode(',',array_fill(0,count(MatchRules::OPEN),'?')).')');$q->execute(MatchRules::OPEN);$n=(int)$q->fetchColumn();$q->closeCursor();return $n;}
+    public function saveOpenCounter(?array $before,int $open): void
+    {if($before===null){$this->pdo->prepare('INSERT INTO match_open_counter(id,revision,open_count) VALUES(1,1,?)')->execute([$open]);return;}$q=$this->pdo->prepare('UPDATE match_open_counter SET revision=?,open_count=? WHERE id=1 AND revision=?');$q->execute([MatchRules::next($before['revision']),$open,$before['revision']]);if($q->rowCount()!==1)MatchRules::fail('STATE_CONFLICT');}
     public function openSql(int $min,int $max,?array $after,int $limit=256,bool $equal=false): array
     {
         if($limit<1||$limit>256)throw new LogicException('Candidate bound');$where=['open_for_join=1'];$args=[];

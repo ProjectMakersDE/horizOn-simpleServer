@@ -320,6 +320,8 @@ CREATE TABLE IF NOT EXISTS player_matches (
 );
 CREATE INDEX IF NOT EXISTS idx_matches_deleted ON player_matches(active_user_id,user_id);
 CREATE TABLE IF NOT EXISTS match_config (id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER NOT NULL,board_key TEXT);
+-- One row: matches in lobby, active or reporting, adjusted in the transaction of every status change.
+CREATE TABLE IF NOT EXISTS match_open_counter (id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER NOT NULL,open_count INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS match_maintenance (
  kind TEXT PRIMARY KEY, revision INTEGER NOT NULL, cutoff_millis INTEGER NOT NULL, after_due INTEGER, after_id TEXT
 );

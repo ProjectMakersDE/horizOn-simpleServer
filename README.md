@@ -1732,8 +1732,8 @@ their subsequent point GET returns404. Polling is explicit, with a120-second hin
 
 One installation is one project. Editable defaults are `MATCHES_ACTIVE=10`,
 `MATCHES_STATE_BYTES=8192`, `MATCHES_RETAINED=100`, `MATCHES_PENDING_INVITES=20`,
-`MATCHES_SETTLEMENT=100`, `MATCHES_HISTORY_RETENTION_SECONDS=604800` and
-`MATCHES_RANKED_SETTLEMENT_SECONDS=604800`. Positive counts/durations accept Int32 values
+`MATCHES_SETTLEMENT=100`, `MATCHES_HISTORY_RETENTION_SECONDS=604800`,
+`MATCHES_RANKED_SETTLEMENT_SECONDS=604800` and `MATCHES_ACCOUNT_OPEN=10000`. Positive counts/durations accept Int32 values
 above those defaults. Completed count and history duration explicitly allow zero.
 `MatchRules::limits()` provides the nominal hosted profiles; Free has zero completed
 history and zero completed-detail retention. The local installation uses its configured
@@ -1757,6 +1757,13 @@ participation must fit the portable frame. See the [MySQL BLOB/TEXT reference](h
 Invitations reserve only invitation capacity. Create/join atomically reserve active and
 settlement slots. Reporting releases the active slot and keeps its settlement reservation;
 completion releases settlement. Completed history never blocks starting another open match.
+`MATCHES_ACCOUNT_OPEN` caps the open matches (lobby, active or reporting) of the whole
+installation. It is not part of the public `limits` object. Create returns422
+`ACCOUNT_MATCH_LIMIT_REACHED` once that many are open; join, turns, leave, results, cancel and
+cleanup are never blocked by it, and a lowered limit keeps existing matches playable. One
+counter row (`match_open_counter`) changes in the same transaction as every status change that
+enters or leaves the open set and never drops below zero. A missing row is backfilled once by
+counting stored open matches through the status index.
 Reducing policy keeps existing reads and safe leave/cancel operations. Terminal count and
 age policy is applied only by explicit bounded cleanup, apart from the new terminal row's
 stored expiry. A zero policy makes its detail immediately unavailable: its successful terminal

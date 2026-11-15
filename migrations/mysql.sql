@@ -314,6 +314,8 @@ CREATE TABLE IF NOT EXISTS player_matches (
  INDEX idx_matches_deleted(active_user_id,user_id), FOREIGN KEY(active_user_id) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS match_config (id INT PRIMARY KEY, revision BIGINT NOT NULL, board_key VARCHAR(128) NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+-- One row: matches in lobby, active or reporting, adjusted in the transaction of every status change.
+CREATE TABLE IF NOT EXISTS match_open_counter (id INT PRIMARY KEY, revision BIGINT NOT NULL, open_count INT NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS match_maintenance (
  kind VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY, revision BIGINT NOT NULL, cutoff_millis BIGINT NOT NULL,
  after_due BIGINT NULL, after_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL
