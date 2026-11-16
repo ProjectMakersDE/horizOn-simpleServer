@@ -8,8 +8,8 @@ class InboxStorage
 {
     public const SOURCE_BYTES = 34;
     public const ORDINARY_BYTES = 17;
-    public const TYPES = ['friend_request','friend_accept','group_invite','group_request','group_accept-invite','group_accept-request','match_turn','marketplace'];
-    public const KEYS = ['horizon.friends.request','horizon.friends.accept','horizon.groups.invite','horizon.groups.request','horizon.groups.accept-invite','horizon.groups.accept-request','horizon.matches.your_turn','marketplace.item_return'];
+    public const TYPES = ['friend_request','friend_accept','group_invite','group_request','group_accept-invite','group_accept-request','match_turn','marketplace','item_gift','item_gift_return'];
+    public const KEYS = ['horizon.friends.request','horizon.friends.accept','horizon.groups.invite','horizon.groups.request','horizon.groups.accept-invite','horizon.groups.accept-request','horizon.matches.your_turn','marketplace.item_return','horizon.item_gifts.offer','horizon.item_gifts.return'];
     public static function required(): void { InboxRules::fail('MIGRATION_REQUIRED','Original Inbox state needs reconciliation and is preserved'); }
     public static function uuidBytes(string $id): string { return hex2bin(str_replace('-','',InboxRules::uuid($id))); }
     public static function uuid(string $bytes): string {
@@ -67,7 +67,7 @@ class InboxStorage
         $packed=self::bytes($row['e']??'');if(strlen($packed)%self::SOURCE_BYTES!==0)self::required();$seen=[];
         for($offset=0;$offset<strlen($packed);$offset+=self::SOURCE_BYTES){
             $kind=ord($packed[$offset+16]);$status=ord($packed[$offset+17]);
-            if(($kind&127)>7||$status>3)self::required();
+            if(($kind&127)>9||$status>3)self::required();
             $entry=['sourceId'=>self::uuid(substr($packed,$offset,16)),'kind'=>$kind&127,'recipientBound'=>($kind&128)!==0,
                 'issuedAtMillis'=>self::readLong($packed,$offset+18),'expiresAtMillis'=>self::readLong($packed,$offset+26),'read'=>($status&1)!==0,'claimed'=>($status&2)!==0];
             $identity=$entry['kind'].':'.$entry['sourceId'].':'.$entry['issuedAtMillis'];if(isset($seen[$identity]))self::required();$seen[$identity]=true;$state['sourceEntries'][]=$entry;
@@ -90,7 +90,7 @@ class InboxStorage
     public static function encodeState(array $state): string {
         if(!$state['_compact'])self::required();$row=['s'=>1,'r'=>self::integer($state['revision'])];$packed='';
         foreach($state['sourceEntries']as$entry){
-            $kind=$entry['kind'];if(!is_int($kind)||$kind<0||$kind>7)self::required();
+            $kind=$entry['kind'];if(!is_int($kind)||$kind<0||$kind>9)self::required();
             $packed.=self::uuidBytes($entry['sourceId']).chr($kind|(($entry['recipientBound']??true)?128:0)).chr(self::flag($entry['read'],$entry['claimed']))
                 .pack('P',self::integer($entry['issuedAtMillis'])).pack('P',self::integer($entry['expiresAtMillis']));
         }
