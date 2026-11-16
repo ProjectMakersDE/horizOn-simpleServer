@@ -27,6 +27,7 @@ Built for indie game developers and small studios who want full control over the
 - Friends: bilateral requests, explicit revisions, blocklists and atomic Inbox notifications
 - Groups: open/request/invite membership, leader/officer/member roles, private object data and bounded member pages
 - Items: indexed catalog, unique inventory instances, rule-bound properties, equip/discard and atomic paid item grants
+- Item gifts: send one original item to another player through the Inbox, with a 7-day expiry, decline returns and an optional fee
 - Shared Objects: opaque binary data, collection permissions, indexed queries, explicit revisions and bounded cleanup
 - User feedback collection
 - User log ingestion (INFO, WARN, ERROR)
@@ -89,6 +90,8 @@ This table compares the self-hosted Simple Server with the fully managed [horizO
 | **Items** | | |
 | Catalog pages, unique inventory, rule-bound properties and atomic paid grants | :white_check_mark: | :white_check_mark: |
 | Catalog administration / inventory inspection | local operator CLI | scoped dashboard / Account Key |
+| Item gifts through the Inbox (send, decline, expiry return, fee) | :white_check_mark: | :white_check_mark: |
+| Item gift configuration, recovery and cleanup | local operator CLI | scoped dashboard / Account Key |
 | **Shared Objects** | | |
 | Opaque bytes, indexed queries and owner/friends/group permissions | :white_check_mark: | :white_check_mark: |
 | Collection administration and ordinary trusted game notices | local operator CLI | scoped dashboard / trusted backend |
@@ -2004,3 +2007,56 @@ product limit. No SQL schema or stored listing/player format changes in this par
 Sparse database/index allocation
 is not a per-player capacity guarantee. Run `bash tests/test.sh`; dedicated tests also support
 an explicit loopback `HORIZON_MARKET_TEST_DSN` whose database must match `task1015_<hex>`.
+
+### Item gifts: one original item through the Inbox (TASK-1140)
+
+Item gifts start disabled and implement the six `/api/v1/app/item-gifts` routes with
+SQLite/MySQL transactions: `GET /config`, `GET /` (own state), `POST /` (send),
+`GET /operations/{operationId}`, `GET /{giftId}` and `POST /{giftId}/decline`. Every route
+needs the project key and the active player session of `userId`. There is no gift claim route:
+the recipient claims the `item_gift` Inbox entry with the existing `POST /inbox/claim`, and the
+sender claims an `item_gift_return` entry the same way. The entry attachment is
+`itemGift: {giftId, instanceId, itemKey, direction}` with `direction` `offer` or `return`.
+The claim adds the unchanged original instance (ID, properties, creation time) exactly once and
+returns it in `items`. A claim replay returns the same reference without granting again.
+
+Send binds `expectedInventoryRevision` and `expectedConfigRevision`. Persist the original
+`operationId`, canonical UTC millisecond `issuedAt` and the complete body before HTTP. Send
+once, reconcile through `/item-gifts/operations/{operationId}`, and replay only that same
+intent: the first send answers 201, a matching replay 200 with the original receipt. A different
+body for the same ID answers 409 `OPERATION_CONFLICT`. The item leaves the sender inventory into
+escrow in the same transaction that debits the fee and writes the recipient Inbox entry. A full
+recipient Inbox answers 409 `RECIPIENT_INBOX_FULL` and nothing changes. Equipped items, self
+gifts, blocked players, inactive templates and a full recipient inventory at claim are refused.
+
+A configured fee is charged at send in the configured Player Values currency and is never
+refunded, also not on decline or expiry. An offer is claimable for 7 days. Expiry is enforced at
+claim time, so an expired offer answers `GIFT_EXPIRED` even before cleanup ran. Decline and
+expiry move the gift to `return_pending`, then a separate step delivers an `item_gift_return`
+entry to the sender (`return_delivered`, then `returned` after the claim). A full sender Inbox
+keeps the return pending and retries after 30 minutes. Unclaimed returns stay valuable and
+never expire. Terminal gifts keep their detail for 7 days. Before removal, the sender's
+permanent operation floor is raised, so a late retry of that send answers `OPERATION_EXPIRED`
+instead of creating a second gift. A deleted recipient sends the offer back to the sender. A
+return to a deleted sender is held as `ownerUnavailable` for explicit operator recovery.
+
+Local operator equivalents live in `php bin/item-gifts.php` (direct HTTP answers 403):
+
+- `config`, `configure REV < {"enabled":true,"currencyKey":"gold","fee":10}`, `limits`;
+- `list [STATUS|- [LIMIT [CURSOR]]]`, `get GIFT_ID`, `player USER_ID`;
+- `retry-return GIFT_ID`, `recover GIFT_ID REV < {"recipientId":"UUID","note":"..."}`;
+- `cleanup` and `cleanup-deleted`.
+
+Save the Player Values currency definition before you configure a fee. `currencyKey: null`
+requires `fee: 0`. Run `cleanup` every 30 minutes in the host scheduler: each run prepares and
+delivers at most 10 due returns and removes at most 10 terminal gifts through indexed SQL. The
+local installation defaults to 50 open gifts per sender, 10000 retained gifts and 120 sends per
+project minute, plus a 1000 ms cooldown per player. Configure these positive Int32 policies with
+`ITEM_GIFTS_OPEN_GIFTS`, `ITEM_GIFTS_RETAINED_GIFTS` and `ITEM_GIFTS_WRITES_PER_MINUTE`.
+`GiftRules::limits()` still exposes the five hosted tariff profiles.
+
+Storage per gift is one `item_gifts` row with the compact escrowed original (the same packed
+format as Marketplace escrow), at most one operation entry and at most eight recovery audit
+records. Player state keeps open IDs, a bounded history, the cooldown and the operation floor.
+Run `bash tests/test.sh`; `tests/item-gifts.php` also supports an explicit loopback
+`HORIZON_GIFT_TEST_DSN` whose database must match `task1140_<hex>`.

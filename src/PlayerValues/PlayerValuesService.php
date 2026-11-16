@@ -96,6 +96,18 @@ class PlayerValuesService
         }
     }
 
+    /** Internal item gift fee: debit only, never refunded. The gift source owns replay protection. */
+    public function charge(string $user,string $key,int $amount): void
+    {
+        if (!$this->transactions->isRunning()) throw new LogicException('Charge requires the owning SQL scope');
+        $this->player($user,true); PlayerValuesLedger::key($key); PlayerValuesLedger::integer($amount,1);
+        $config=$this->config(false,true);
+        if (!in_array($key,array_column($config['definitions'],'key'),true)) PlayerValuesLedger::fail('INVALID_REQUEST','Currency requires a saved Player Values definition',400);
+        $state=PlayerValuesLedger::initialize($this->state($user),$config['definitions'],($this->clock)());
+        if (($state['values'][$key]??0)<$amount) PlayerValuesLedger::fail('INSUFFICIENT_BALANCE','Insufficient balance');
+        $state['values'][$key]-=$amount; $this->save($user,PlayerValuesLedger::advance($state));
+    }
+
     /** Local operator only. Expected revision is mandatory, including initial revision zero. */
     public function configure(array $request, int $expectedRevision): array
     {
