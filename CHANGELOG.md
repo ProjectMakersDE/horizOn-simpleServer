@@ -1,3 +1,10 @@
+# [1.8.0](https://github.com/ProjectMakersDE/horizOn-simpleServer/compare/v1.7.0...v1.8.0) (2026-11-16)
+
+
+### Features
+
+* **item-gifts:** send original items through the Inbox (TASK-1140) ([1d2f009](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/1d2f0099603d120aa5e6a3fe8f7ba7ce9a7b1f46))
+
 # [1.7.0](https://github.com/ProjectMakersDE/horizOn-simpleServer/compare/v1.6.0...v1.7.0) (2026-11-15)
 
 
