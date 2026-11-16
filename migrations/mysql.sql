@@ -337,6 +337,21 @@ CREATE TABLE IF NOT EXISTS market_listings(id CHAR(36) CHARACTER SET ascii COLLA
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS market_maintenance(kind VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY,revision BIGINT NOT NULL,data TEXT NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- Item gifts (TASK-1140): indexed metadata plus one escrowed original and the sender's operation; no cascading escrow deletion.
+CREATE TABLE IF NOT EXISTS gift_header(id INT PRIMARY KEY,version BIGINT NOT NULL,revision BIGINT NOT NULL,data TEXT NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS gift_players(user_id CHAR(36) PRIMARY KEY,active_user_id CHAR(36) NULL,revision BIGINT NOT NULL,data MEDIUMTEXT NOT NULL,
+ INDEX idx_gift_deleted(active_user_id,user_id),FOREIGN KEY(active_user_id) REFERENCES users(id) ON DELETE SET NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS item_gifts(id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY,revision BIGINT NOT NULL,
+ status VARCHAR(24) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,sender_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+ recipient_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,return_owner CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+ created_millis BIGINT NOT NULL,due_kind INT NOT NULL,due_millis BIGINT NOT NULL,owner_unavailable TINYINT NOT NULL,
+ offer_entry VARCHAR(46) CHARACTER SET ascii COLLATE ascii_bin NULL,return_entry VARCHAR(46) CHARACTER SET ascii COLLATE ascii_bin NULL,
+ op_actor CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,op_operation CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,data TEXT NOT NULL,
+ UNIQUE INDEX idx_gift_operation(op_actor,op_operation),INDEX idx_gift_recipient(recipient_id,status,created_millis,id),INDEX idx_gift_due(due_kind,due_millis,id),
+ INDEX idx_gift_admin(created_millis,id),INDEX idx_gift_admin_status(status,created_millis,id),
+ INDEX idx_gift_inbox_offer(recipient_id,offer_entry),INDEX idx_gift_inbox_return(return_owner,return_entry)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- Request identity index only, no duplicated pending payload or player list.
 CREATE TABLE IF NOT EXISTS group_inbox_sources(request_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY,group_id CHAR(36) NOT NULL,INDEX idx_group_inbox_group(group_id,request_id),FOREIGN KEY(group_id) REFERENCES groups_state(id) ON DELETE CASCADE) ENGINE=InnoDB;
 

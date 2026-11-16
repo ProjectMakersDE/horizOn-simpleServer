@@ -344,6 +344,23 @@ CREATE INDEX IF NOT EXISTS idx_market_due ON market_listings(due_kind,due_millis
 CREATE INDEX IF NOT EXISTS idx_market_owner ON market_listings(return_owner,id);
 CREATE TABLE IF NOT EXISTS market_maintenance(kind TEXT PRIMARY KEY,revision INTEGER NOT NULL,data TEXT NOT NULL);
 
+-- Item gifts (TASK-1140): one escrowed original per gift, preserved after player deletion; no valuable row has a TTL.
+CREATE TABLE IF NOT EXISTS gift_header(id INTEGER PRIMARY KEY,version INTEGER NOT NULL,revision INTEGER NOT NULL,data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS gift_players(user_id TEXT PRIMARY KEY,active_user_id TEXT,revision INTEGER NOT NULL,data TEXT NOT NULL,
+ FOREIGN KEY(active_user_id) REFERENCES users(id) ON DELETE SET NULL);
+CREATE INDEX IF NOT EXISTS idx_gift_deleted ON gift_players(active_user_id,user_id);
+CREATE TABLE IF NOT EXISTS item_gifts(id TEXT PRIMARY KEY COLLATE BINARY,revision INTEGER NOT NULL,status TEXT NOT NULL COLLATE BINARY,
+ sender_id TEXT NOT NULL COLLATE BINARY,recipient_id TEXT NOT NULL COLLATE BINARY,return_owner TEXT NOT NULL COLLATE BINARY,created_millis INTEGER NOT NULL,
+ due_kind INTEGER NOT NULL,due_millis INTEGER NOT NULL,owner_unavailable INTEGER NOT NULL,offer_entry TEXT COLLATE BINARY,return_entry TEXT COLLATE BINARY,
+ op_actor TEXT COLLATE BINARY,op_operation TEXT COLLATE BINARY,data TEXT NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_gift_operation ON item_gifts(op_actor,op_operation);
+CREATE INDEX IF NOT EXISTS idx_gift_recipient ON item_gifts(recipient_id,status,created_millis,id);
+CREATE INDEX IF NOT EXISTS idx_gift_due ON item_gifts(due_kind,due_millis,id);
+CREATE INDEX IF NOT EXISTS idx_gift_admin ON item_gifts(created_millis,id);
+CREATE INDEX IF NOT EXISTS idx_gift_admin_status ON item_gifts(status,created_millis,id);
+CREATE INDEX IF NOT EXISTS idx_gift_inbox_offer ON item_gifts(recipient_id,offer_entry);
+CREATE INDEX IF NOT EXISTS idx_gift_inbox_return ON item_gifts(return_owner,return_entry);
+
 -- Request identity index only, no duplicated pending payload or player list.
 CREATE TABLE IF NOT EXISTS group_inbox_sources(request_id TEXT PRIMARY KEY COLLATE BINARY,group_id TEXT NOT NULL,FOREIGN KEY(group_id) REFERENCES groups_state(id) ON DELETE CASCADE);
 CREATE INDEX IF NOT EXISTS idx_group_inbox_group ON group_inbox_sources(group_id,request_id);

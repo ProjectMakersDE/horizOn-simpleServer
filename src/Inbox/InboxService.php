@@ -45,7 +45,7 @@ class InboxService
     private static function generation(array $state,int $issued): int { return max(PlayerValuesLedger::integer($issued,0),PlayerValuesLedger::integer($state['revision'],0,PlayerValuesLedger::MAX-1)+1); }
     private static function bump(array $state,?int $generation=null): array { $state=InboxRules::bump($state);if($generation!==null)$state['revision']=max($state['revision'],$generation);return $state; }
     public static function earliestExpiry(array $state,array $catalog): ?int {
-        $times=[];foreach($state['sourceEntries']as$e)if($e['kind']!==7||$e['claimed'])$times[]=$e['expiresAtMillis'];
+        $times=[];foreach($state['sourceEntries']as$e)if(!self::keepsUnclaimed($e['kind'])||$e['claimed'])$times[]=$e['expiresAtMillis'];
         foreach($state['freeTextEntries']as$e)$times[]=$e['expiresAtMillis'];
         foreach($state['entries']as$e)if(!InboxRules::valuable($e)||$e['claimed'])$times[]=InboxRules::millis($e['content']['expiresAt']);
         $ids=array_fill_keys(array_column(array_merge($state['ordinaryMarkers'],$state['markers']),'id'),true);
@@ -57,7 +57,9 @@ class InboxService
         $this->pdo->prepare($sql)->execute([$user,InboxStorage::encodeState($state),self::earliestExpiry($state,$catalog)]);
     }
     private function saveCatalog(array $catalog): void { $this->pdo->prepare('UPDATE inbox_catalog SET data=? WHERE id=1')->execute([InboxStorage::encodeCatalog($catalog)]); }
-    private static function sourceRetained(array $entry,int $now): bool { return $entry['expiresAtMillis']>$now||($entry['kind']===7&&!$entry['claimed']); }
+    /** Original-item returns (marketplace and item gifts) have no deleting expiry while unclaimed. An offer ends at its deadline. */
+    private static function keepsUnclaimed(int $kind): bool { return $kind===7||$kind===9; }
+    private static function sourceRetained(array $entry,int $now): bool { return $entry['expiresAtMillis']>$now||(self::keepsUnclaimed($entry['kind'])&&!$entry['claimed']); }
     private static function marker(array $state,array $catalog,string $id): array {
         $slot=InboxStorage::rewardSlot($catalog,$id);
         if($slot>=0&&$state['_compact']){$status=InboxStorage::status($state['rewardStates'],$slot);return ['id'=>$id,'read'=>$status!==0,'claimed'=>$status===2,'removed'=>$status===3];}
@@ -148,14 +150,14 @@ class InboxService
             if($found===null){
                 foreach($state['entries']as$e)if(($e['id']??null)===$entry&&($e['claimed']??false)&&isset($e['content'])&&InboxRules::valuable($e))$found=InboxRules::viewEntry($e,$now);
                 foreach($catalog['entries']as$e)if($e['id']===$entry&&InboxRules::valuable($e)){$m=self::marker($state,$catalog,$entry);if($m['claimed']&&!$m['removed'])$found=InboxRules::viewEntry($e,$now,$m);}
-                if($found===null){$reference=$this->sources->claimedReturn($user,$entry);if($reference!==null)return ['entryId'=>$entry,'replayed'=>true,'inbox'=>$this->view($player,$state,$catalog,$now),'playerValues'=>$this->values->get($user),'items'=>[$reference]];}
+                if($found===null){$reference=$this->sources->claimedReturn($user,$entry)??$this->sources->claimedGift($user,$entry);if($reference!==null)return ['entryId'=>$entry,'replayed'=>true,'inbox'=>$this->view($player,$state,$catalog,$now),'playerValues'=>$this->values->get($user),'items'=>[$reference]];}
             }
             if($found===null)InboxRules::fail('ENTRY_NOT_FOUND','Inbox entry not found',404);
             self::storedOriginal($state,$catalog,$entry);
             if(!InboxRules::attachmentValuable($found['attachment']))InboxRules::fail('NO_ATTACHMENT','This entry has no reward',422);
-            $return=$found['attachment']['itemReturn']??null;$references=$return===null?[]:[['instanceId'=>$return['instanceId'],'itemKey'=>$return['itemKey']]];
+            $return=$found['attachment']['itemReturn']??null;$gift=$found['attachment']['itemGift']??null;$original=$return??$gift;$references=$original===null?[]:[['instanceId'=>$original['instanceId'],'itemKey'=>$original['itemKey']]];
             $old=false;foreach($state['entries']as$e)if($e['id']===$entry)$old=true;foreach($catalog['entries']as$e)if($e['id']===$entry&&$e['sourceOperationId']!==null)$old=true;
-            $bridge=$old&&$return===null?new InboxLegacyRewards($this->pdo,$this->clock,$this->transactions):null;
+            $bridge=$old&&$original===null?new InboxLegacyRewards($this->pdo,$this->clock,$this->transactions):null;
             if($bridge!==null){$applied=$bridge->wasApplied($user,$entry,$found['attachment']['values']);if(!$found['claimed']&&$applied)InboxStorage::required();if($found['claimed']&&$applied)$bridge->acknowledge($user,$entry,$found['attachment']['values']);}
             if($found['claimed'])return ['entryId'=>$entry,'replayed'=>true,'inbox'=>$this->view($player,$state,$catalog,$now),'playerValues'=>$this->values->get($user),'items'=>$references];
             self::writable($state);$next=$this->prune($user,$state,$catalog,$now);
@@ -163,6 +165,7 @@ class InboxService
             else {foreach($next['entries']as&$e)if($e['id']===$entry){$e['read']=true;$e['claimed']=true;}unset($e);foreach($next['sourceEntries']as&$e)if(InboxStorage::sourceId($e,$user)===$entry){$e['read']=true;$e['claimed']=true;}unset($e);}
             $next=self::bump($next);$this->save($user,$next,$catalog);
             if($return!==null){require_once __DIR__.'/../Marketplace/MarketService.php';try{$references=(new MarketService($this->pdo,$this->clock,$this->transactions))->claimReturn($user,$entry,$return);}catch(MarketFailure $e){InboxRules::fail($e->errorCode,$e->getMessage(),$e->status);}$values=$this->values->get($user);}
+            elseif($gift!==null){require_once __DIR__.'/../ItemGifts/GiftService.php';try{$references=(new GiftService($this->pdo,$this->clock,$this->transactions))->claim($user,$entry,$gift);}catch(GiftFailure $e){InboxRules::fail($e->errorCode,$e->getMessage(),$e->status);}$values=$this->values->get($user);}
             else $values=$this->values->grantFromSource($user,$found['attachment']['values'],'inbox:'.$entry,$now,'inbox:'.$entry);
             return ['entryId'=>$entry,'replayed'=>false,'inbox'=>$this->view($player,$next,$catalog,$now),'playerValues'=>$values,'items'=>$references];
         });
@@ -183,6 +186,12 @@ class InboxService
     public function deliverItemReturnPending(string $user,array $input,string $operation,int $issued,string $source,callable $complete): array {
         if(!$this->transactions->isRunning())throw new LogicException('Return delivery requires the source SQL scope');
         return $this->transaction(function()use($user,$input,$operation,$issued,$source,$complete){$delivered=$this->delivery($user,$input,$operation,$issued,$source,true,true);if(!$complete($this->pdo,$delivered['result']['entryId']))InboxRules::fail('SOURCE_NOT_PENDING','Return source changed');return $delivered['result'];});
+    }
+    /** Item gift offers and returns join the gift source's SQL scope; only that source creates the itemGift attachment. */
+    public function deliverItemGiftPending(string $user,array $input,string $operation,int $issued,string $source,callable $complete): array {
+        if(!$this->transactions->isRunning())throw new LogicException('Gift delivery requires the source SQL scope');
+        if(!isset($input['attachment']['itemGift']))InboxRules::invalid('Gift source required');
+        return $this->deliverItemReturnPending($user,$input,$operation,$issued,$source,$complete);
     }
     private function delivery(string $user,array $input,string $operation,int $issued,string $source,bool $pending,bool $trustedReturn=false): array {
         InboxRules::text($operation,128,false);InboxRules::text($source,200,false);$this->player($user,true);$state=$this->state($user,true);$content=InboxRules::content($input,$trustedReturn);

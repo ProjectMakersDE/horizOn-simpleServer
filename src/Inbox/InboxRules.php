@@ -67,8 +67,15 @@ class InboxRules
         ksort($parameters, SORT_STRING);
         $attachment = $input['attachment'] ?? null;
         if ($attachment !== null) {
-            if (!is_array($attachment) || array_diff(array_keys($attachment), $trustedReturn ? ['values','itemReturn'] : ['values'])) self::invalid('Unsupported attachment');
-            $itemReturn=$attachment['itemReturn']??null;
+            if (!is_array($attachment) || array_diff(array_keys($attachment), $trustedReturn ? ['values','itemReturn','itemGift'] : ['values'])) self::invalid('Unsupported attachment');
+            $itemReturn=$attachment['itemReturn']??null; $itemGift=$attachment['itemGift']??null;
+            if ($itemGift!==null) {
+                // Only the item gift source creates this descriptor. The original item stays in escrow.
+                if (!$trustedReturn || $itemReturn!==null || !is_array($itemGift) || array_diff(array_keys($itemGift),['giftId','instanceId','itemKey','direction']) || count($itemGift)!==4) self::invalid('Trusted gift source required');
+                foreach (['giftId','instanceId'] as $field) if (self::uuid($itemGift[$field])!==$itemGift[$field]) self::invalid('Canonical gift identity required');
+                if (!is_string($itemGift['itemKey']) || !preg_match('/^[a-z][a-z0-9_]{0,63}$/D',$itemGift['itemKey']) || !in_array($itemGift['direction'],['offer','return'],true)) self::invalid('Invalid gift item');
+                $itemGift=['giftId'=>$itemGift['giftId'],'instanceId'=>$itemGift['instanceId'],'itemKey'=>$itemGift['itemKey'],'direction'=>$itemGift['direction']];
+            }
             if ($itemReturn!==null) {
                 if (!$trustedReturn || !is_array($itemReturn) || array_diff(array_keys($itemReturn),['listingId','instanceId','itemKey']) || count($itemReturn)!==3) self::invalid('Trusted return source required');
                 foreach (['listingId','instanceId'] as $field) if (self::uuid($itemReturn[$field])!==$itemReturn[$field]) self::invalid('Canonical return identity required');
@@ -82,14 +89,15 @@ class InboxRules
                 $keys[$key] = true; $value = ['key' => $key, 'amount' => $amount];
             }
             unset($value); usort($values, static function ($a, $b) { return strcmp($a['key'], $b['key']); });
-            if ($itemReturn!==null && $values) self::invalid('Item returns cannot contain value rewards');
+            if (($itemReturn!==null || $itemGift!==null) && $values) self::invalid('Item returns cannot contain value rewards');
             $attachment = ['values' => $values];
             if ($itemReturn!==null) $attachment['itemReturn']=$itemReturn;
+            if ($itemGift!==null) $attachment['itemGift']=$itemGift;
         }
         return ['type' => $type, 'reference' => $reference, 'textKey' => $text, 'parameters' => (object)$parameters,
             'expiresAt' => self::instant(self::millis($input['expiresAt'] ?? null)), 'attachment' => $attachment];
     }
-    public static function attachmentValuable(?array $attachment): bool { return !empty($attachment['values']) || isset($attachment['itemReturn']); }
+    public static function attachmentValuable(?array $attachment): bool { return !empty($attachment['values']) || isset($attachment['itemReturn']) || isset($attachment['itemGift']); }
     public static function valuable(array $message): bool { return self::attachmentValuable($message['content']['attachment']); }
     public static function retained(array $message, int $now): bool { return self::millis($message['content']['expiresAt']) > $now || (self::valuable($message) && !$message['claimed']); }
     public static function validate(array $content, int $now, bool $pending = false): void

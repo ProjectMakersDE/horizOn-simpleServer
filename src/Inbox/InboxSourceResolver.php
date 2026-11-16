@@ -26,9 +26,11 @@ class InboxSourceResolver
         $kind=InboxStorage::sourceKind($content);if($kind===null)InboxRules::invalid('A typed source adapter is required');
         $parameters=(array)$content['parameters'];
         $id=self::uuid($kind===1?($parameters['userId']??null):(in_array($kind,[4,5],true)?($parameters['groupId']??null):$content['reference']));
-        $prefix=$kind<2?'friends:':($kind<6?'groups:':($kind===6?'match:':'marketplace:'));
-        if(strpos($source,$prefix)!==0||($kind!==7&&InboxRules::attachmentValuable($content['attachment']))||
-            ($kind===7&&($content['attachment']['itemReturn']['listingId']??null)!==$id))InboxRules::invalid('Delivery does not match its source');
+        $prefix=$kind<2?'friends:':($kind<6?'groups:':($kind===6?'match:':($kind===7?'marketplace:':'item-gift:')));
+        $gift=$content['attachment']['itemGift']??null;
+        if(strpos($source,$prefix)!==0||($kind<7&&InboxRules::attachmentValuable($content['attachment']))||
+            ($kind===7&&(($content['attachment']['itemReturn']['listingId']??null)!==$id||$gift!==null))||
+            ($kind>7&&(($gift['giftId']??null)!==$id||$gift['direction']!==($kind===8?'offer':'return')||isset($content['attachment']['itemReturn']))))InboxRules::invalid('Delivery does not match its source');
         return ['sourceId'=>$id,'kind'=>$kind,'recipientBound'=>true,'issuedAtMillis'=>$generation,
             'expiresAtMillis'=>InboxRules::millis($content['expiresAt']),'read'=>false,'claimed'=>false];
     }
@@ -79,7 +81,37 @@ class InboxSourceResolver
                 $ref=$this->reference($row['itemReference']);
                 if(!$e['claimed']&&!ItemStorage::escrowMatches($row['item'],$ref))InboxStorage::required();
                 $put($e,$e['sourceId'],[],self::integer($row['revision']),['values'=>[],'itemReturn'=>['listingId'=>$e['sourceId']]+$ref]);}
+        }
+        foreach(array_chunk(array_values(array_filter($entries,static function($e){return $e['kind']===8||$e['kind']===9;})),200)as$batch){
+            $ids=array_values(array_unique(array_column($batch,'sourceId')));
+            $rows=$this->rows('SELECT id,data FROM item_gifts WHERE id IN ('.self::placeholders($ids).')',$ids);
+            foreach($batch as$e){$row=$rows[$e['sourceId']]??null;$entry=InboxStorage::sourceId($e,$user);
+                // A consumed source is the only reason a gift row disappears; nothing claimable is lost by skipping it.
+                if($row===null){if(!$e['claimed']&&$e['kind']===9)InboxStorage::required();continue;}
+                $ref=$this->reference($row['itemReference']??null);$escrow=$row['item']??null;
+                if($e['kind']===8){
+                    // Decline, expiry processing and recipient deletion revoke the offer without a recipient write.
+                    if(($row['recipientId']??null)!==$user||($row['offerEntryId']??null)!==$entry||($row['status']??null)!==($e['claimed']?'claimed':'offered'))continue;
+                    if(!$e['claimed']&&!ItemStorage::escrowMatches(is_array($escrow)?$escrow:null,$ref))InboxStorage::required();
+                    $put($e,$e['sourceId'],['senderId'=>self::uuid($row['senderId']??null)],self::integer($row['revision']??null),['values'=>[],'itemGift'=>['giftId'=>$e['sourceId']]+$ref+['direction'=>'offer']]);
+                }else{
+                    // Operator recovery moves the return to another owner. The previous owner's notice disappears.
+                    if(($row['returnOwnerId']??null)!==$user)continue;
+                    if(($row['returnEntryId']??null)!==$entry||($row['ownerUnavailable']??null)!==false||($row['status']??null)!==($e['claimed']?'returned':'return_delivered'))InboxStorage::required();
+                    if(!$e['claimed']&&!ItemStorage::escrowMatches(is_array($escrow)?$escrow:null,$ref))InboxStorage::required();
+                    $put($e,$e['sourceId'],['reason'=>($row['declinedAt']??null)!==null?'declined':'expired','recipientId'=>self::uuid($row['recipientId']??null)],self::integer($row['revision']??null),
+                        ['values'=>[],'itemGift'=>['giftId'=>$e['sourceId']]+$ref+['direction'=>'return']]);
+                }
+            }
         }return $result;
+    }
+    /** Replay proof of a claimed gift or gift return after its Inbox tuple was pruned, bound to the exact entry. */
+    public function claimedGift(string $user,string $entry): ?array {
+        foreach([['recipient_id','offer_entry','claimed'],['return_owner','return_entry','returned']]as[$owner,$column,$status]){
+            $q=$this->pdo->prepare('SELECT status,owner_unavailable,data FROM item_gifts WHERE '.$owner.'=? AND '.$column.'=? LIMIT 2');$q->execute([$user,$entry]);$rows=$q->fetchAll(PDO::FETCH_ASSOC);
+            if(count($rows)>1)InboxStorage::required();$row=$rows[0]??null;if($row===null)continue;if($row['status']!==$status||(int)$row['owner_unavailable']!==0)return null;
+            try{$value=json_decode($row['data'],true,32,JSON_THROW_ON_ERROR);}catch(Throwable $e){InboxStorage::required();}return $this->reference($value['itemReference']??null);
+        }return null;
     }
     private function reference($ref): array {
         if(!is_array($ref)||count($ref)!==2||array_diff(array_keys($ref),['instanceId','itemKey'])||!is_string($ref['itemKey'])||!preg_match('/^[a-z][a-z0-9_]{0,63}$/D',$ref['itemKey']))InboxStorage::required();

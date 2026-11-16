@@ -53,6 +53,7 @@ require_once $baseDir . '/src/SharedObjects/SharedObjectController.php';
 require_once $baseDir . '/src/Matches/MatchController.php';
 require_once $baseDir . '/src/Chat/ChatController.php';
 require_once $baseDir . '/src/Marketplace/MarketController.php';
+require_once $baseDir . '/src/ItemGifts/GiftController.php';
 require_once $baseDir . '/src/UserFeedback/UserFeedbackController.php';
 require_once $baseDir . '/src/UserLogs/UserLogsController.php';
 require_once $baseDir . '/src/CrashReporting/CrashReportingController.php';
@@ -176,6 +177,13 @@ $router->post($prefix . '/marketplace/listings', [MarketController::class, 'crea
 $router->post($prefix . '/marketplace/listings/{id}/buy', [MarketController::class, 'buy']);
 $router->post($prefix . '/marketplace/listings/{id}/cancel', [MarketController::class, 'cancel']);
 $router->post($prefix . '/marketplace/listings/{id}/retry-return', [MarketController::class, 'retryReturn']);
+// Item gifts: the six hosted app routes; claiming stays POST /inbox/claim, configuration is the local operator CLI.
+$router->get($prefix . '/item-gifts/config', [GiftController::class, 'config']);
+$router->get($prefix . '/item-gifts', [GiftController::class, 'state']);
+$router->post($prefix . '/item-gifts', [GiftController::class, 'send']);
+$router->get($prefix . '/item-gifts/operations/{operationId}', [GiftController::class, 'operation']);
+$router->get($prefix . '/item-gifts/{giftId}', [GiftController::class, 'get']);
+$router->post($prefix . '/item-gifts/{giftId}/decline', [GiftController::class, 'decline']);
 
 $router->get($prefix . '/matches', [MatchController::class, 'mine']);
 $router->get($prefix . '/matches/limits', [MatchController::class, 'limits']);
