@@ -155,6 +155,51 @@ try {
     $caught=false;try{$scope->run(static function()use($values,$full,$operation){try{$values->purchase($full,'sword',$operation());}catch(ItemFailure $ignored){}});}catch(SqlTransactionRollbackOnly $error){$caught=true;}
     check(true,$caught,'Caught nested grant failure cannot commit an outer scope');
     $separate=connect($target);try{new ItemService($pdo,$clock,new SqlTransaction($separate));throw new RuntimeException('Expected connection mismatch');}catch(InvalidArgumentException $error){check(true,true,'Explicit same-PDO ownership');}$separate=null;
+    // TASK-1152 stack templates: creation-only mode, maxStack bounds, unique shape unchanged.
+    $stackTemplate=static function (array $extra=[]): array { return $extra+['name'=>'Gem','type'=>'material','rarity'=>'common','active'=>true,'baseProperties'=>(object)['power'=>3],'propertyRules'=>[],'mode'=>'stack']; };
+    check(false,array_key_exists('mode',ItemRules::definition('sword',$template())),'Unique definition keeps old shape');check(false,array_key_exists('maxStack',ItemRules::definition('sword',$template()+['mode'=>'unique'])),'Explicit unique keeps old shape');
+    check(99,ItemRules::definition('gem',$stackTemplate())['maxStack'],'Default maxStack');
+    foreach ([$stackTemplate(['maxStack'=>0]),$stackTemplate(['maxStack'=>1000000]),$stackTemplate(['maxStack'=>'5']),$stackTemplate(['mode'=>'pile']),$stackTemplate(['mode'=>null]),$template()+['maxStack'=>5],['propertyRules'=>$template()['propertyRules']]+$stackTemplate()] as $bad)
+        reject('INVALID_REQUEST',static function () use ($bad) { ItemRules::definition('gem',$bad); });
+    $cat=static function () use ($items): int { return $items->catalog(null)['revision']; };
+    $gem=$items->put('gem',$cat(),$stackTemplate(['maxStack'=>5]))['definition'];check(['stack',5],[$gem['mode'],$gem['maxStack']],'Stack definition response');
+    $wire=array_column($items->catalog(null)['definitions'],null,'key');check(['stack',5],[$wire['gem']['mode'],$wire['gem']['maxStack']],'Catalog stack fields');check(false,array_key_exists('mode',$wire['sword']),'Catalog unique has no mode');
+    $revision=$cat();$unchanged=$stackTemplate(['maxStack'=>5]);unset($unchanged['mode']);check($revision,$items->put('gem',$revision,$unchanged)['revision'],'Missing mode keeps stack');
+    unset($unchanged['maxStack']);check(5,$items->put('gem',$revision,$unchanged)['definition']['maxStack'],'Missing maxStack keeps value');
+    reject('ITEM_MODE_LOCKED',static function () use ($items,$cat,$stackTemplate) { $items->put('gem',$cat(),$stackTemplate(['mode'=>'unique','propertyRules'=>[]])); });
+    reject('ITEM_MODE_LOCKED',static function () use ($items,$cat,$template) { $items->put('sword',$cat(),$template()+['mode'=>'stack']); });
+    reject('INVALID_REQUEST',static function () use ($items,$cat,$unchanged) { $items->put('gem',$cat(),array_replace($unchanged,['propertyRules'=>[['key'=>'power','min'=>0,'max'=>9,'maxChangePerCall'=>1]]])); });
+    $switchedOff=new ItemService($pdo,$clock,$scope,null,null,null,null,false);
+    reject('ITEM_MODE_LOCKED',static function () use ($switchedOff,$cat,$stackTemplate) { $switchedOff->put('ore',$cat(),$stackTemplate()); });
+    check(7,$switchedOff->put('gem',$cat(),$stackTemplate(['maxStack'=>7]))['definition']['maxStack'],'Switch off keeps stack edits');$items->put('gem',$cat(),$stackTemplate(['maxStack'=>5]));
+    $items->put('ore',$cat(),$stackTemplate());check(2500,$items->limits()['stacks'],'Selfhost stack slot default');
+    // Grants raise one count per template; inventory counts unique instances only.
+    $stacker=$newUser();
+    $first=$scope->run(static function () use ($items,$stacker,$operation,$now) { return $items->grantFromSource($stacker,[['itemKey'=>'gem','quantity'=>3],['itemKey'=>'sword','quantity'=>1]],$operation(),$now,'stack'); });
+    check([['itemKey'=>'gem','quantity'=>3,'count'=>3]],$first['stacks'],'Stack grant result');check(1,count($first['items']),'Unique grant stays in items');
+    check([['itemKey'=>'gem','count'=>3,'equipped'=>false]],$items->get($stacker)['stacks'],'Inventory stacks snapshot');
+    $tiny=new ItemService($pdo,$clock,$scope,null,1,null,1);check(1,count($tiny->grant($stacker,[['itemKey'=>'gem','quantity'=>1]],$operation(),$now,'stack')['stacks']),'Full unique inventory still accepts stacks');
+    reject('STACK_LIMIT_REACHED',static function () use ($items,$stacker,$operation,$now) { $items->grant($stacker,[['itemKey'=>'gem','quantity'=>2]],$operation(),$now,'stack'); });
+    reject('STACK_LIMIT_REACHED',static function () use ($tiny,$stacker,$operation,$now) { $tiny->grant($stacker,[['itemKey'=>'ore','quantity'=>1]],$operation(),$now,'stack'); });
+    $state=$items->get($stacker);check([2,4],[$state['revision'],$state['stacks'][0]['count']],'Rejected stack grants roll back');
+    $raw=$pdo->prepare('SELECT data FROM player_items WHERE user_id=?');$raw->execute([$stacker]);check([['gem',4,false]],json_decode($raw->fetchColumn(),true)['t'],'Compact stack storage');
+    // Equip and discard by itemKey.
+    check(true,$items->equipStack($stacker,'gem',2,true)['stacks'][0]['equipped'],'Equip stack');
+    foreach ([0,1000000,'1',1.0] as $bad) reject('INVALID_REQUEST',static function () use ($items,$stacker,$bad) { $items->discardStack($stacker,'gem',3,$bad); });
+    reject('ITEM_STACK_TOO_SMALL',static function () use ($items,$stacker) { $items->discardStack($stacker,'gem',3,5); });
+    reject('ITEM_NOT_FOUND',static function () use ($items,$stacker) { $items->equipStack($stacker,'ore',3,true); });
+    $after=$items->discardStack($stacker,'gem',3);check([['itemKey'=>'gem','count'=>3,'equipped'=>true]],$after['stacks'],'Discard default count one');
+    check([],$items->discardStack($stacker,'gem',4,3)['stacks'],'Count zero removes the stack');check(1,count($items->get($stacker)['instances']),'Unique item untouched by stack edits');
+    // Paid purchase: operation.stacks, items unique only, full stack rolls back debit.
+    $stackConfig=$config;$stackConfig['offers'][]=['key'=>'gems','name'=>'Gems','costs'=>[['key'=>'coins','amount'=>5]],'rewards'=>[],'itemRewards'=>[['itemKey'=>'gem','quantity'=>4]]];
+    $values->configure($stackConfig,$values->config(false)['revision']);$gemBuyer=$newUser();$values->get($gemBuyer);
+    $paid=$values->purchase($gemBuyer,'gems',$operation());check([['itemKey'=>'gem','quantity'=>4,'count'=>4]],$paid['operation']['stacks'],'Purchase operation stacks');check([],$paid['operation']['items'],'Purchase items unique only');
+    $before=$values->history($gemBuyer);reject('STACK_LIMIT_REACHED',static function () use ($values,$gemBuyer,$operation) { $values->purchase($gemBuyer,'gems',$operation()); });
+    check($before,$values->history($gemBuyer),'Full stack rolls back purchase');check(4,$items->get($gemBuyer)['stacks'][0]['count'],'No over-max stack');
+    check([],$values->purchase($legacy,'sword',$operation())['operation']['stacks'],'Unique purchase has empty stacks');
+    $values->configure($config,$values->config(false)['revision']);
+    // Stack templates are not tradable.
+    reject('ITEM_NOT_TRADABLE',static function () use ($scope,$items) { $scope->run(static function () use ($items) { $items->escrowTemplate('gem'); }); });
     // Complete-template bytes and actual indexed keyset plan, separate from property bytes.
     $wide=$template((object)[]);$wide['name']=str_repeat('n',99);$wide['propertyRules']=[];
     for($i=0;$i<16;$i++){$key='stat__'.str_pad((string)$i,2,'0',STR_PAD_LEFT);$wide['baseProperties']->{$key}=0;$wide['propertyRules'][]=['key'=>$key,'min'=>-ItemRules::MAX,'max'=>ItemRules::MAX,'maxChangePerCall'=>ItemRules::MAX];}

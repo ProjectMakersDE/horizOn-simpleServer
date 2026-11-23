@@ -186,13 +186,13 @@ class PlayerValuesService
                 $query = $this->pdo->prepare('SELECT data FROM player_value_offers WHERE offer_key = ?' . ($this->mysql ? ' LOCK IN SHARE MODE' : '')); $query->execute([$offerKey]);
                 $row = $query->fetch(); $offer = $row === false ? null : json_decode($row['data'], true, 512, JSON_THROW_ON_ERROR);
                 [$next, $applied] = PlayerValuesLedger::purchase($state, $definitions, $offer);
-                $items = [];
+                $items = []; $stacks = [];
                 if (!empty($offer['itemRewards'])) {
                     $provider = new ItemService($this->pdo, $this->clock, $this->transactions);
                     $grant = $provider->grantFromSource($userId, $offer['itemRewards'], $operationId, PlayerValuesLedger::issuedAt($operationId), 'offer:' . $offerKey);
-                    $items = $grant['items'];
+                    $items = $grant['items']; $stacks = $grant['stacks'];
                 }
-                return [$next, $applied, $items];
+                return [$next, $applied, $items, $stacks];
             });
     }
 
@@ -272,15 +272,15 @@ class PlayerValuesService
             try {
                 $receipt = $sourceOwned ? null : PlayerValuesLedger::receipt($state, $operationId, $hash);
                 if ($receipt !== null) return PlayerValuesLedger::view($userId, $config, $state, $now,
-                    ['operationId' => $operationId, 'replayed' => true, 'applied' => [], 'items' => []]);
+                    ['operationId' => $operationId, 'replayed' => true, 'applied' => [], 'items' => [], 'stacks' => []]);
                 if (!$sourceOwned) PlayerValuesLedger::checkWindow($state, $issuedAt, $now);
                 $initialized = PlayerValuesLedger::initialize($state, $config['definitions'], $now);
                 $changed = $change($initialized, array_column($config['definitions'], null, 'key'));
-                [$next, $applied] = $changed; $items = $changed[2] ?? [];
+                [$next, $applied] = $changed; $items = $changed[2] ?? []; $stacks = $changed[3] ?? [];
                 $next = $sourceOwned ? PlayerValuesLedger::advance($next) : PlayerValuesLedger::record($next,
                     ['operationId'=>$operationId, 'payloadHash'=>$hash, 'issuedAtMillis'=>$issuedAt], $now, $this->limits['receipts']);
                 $this->save($userId, $next);
-                return PlayerValuesLedger::view($userId, $config, $next, $now, ['operationId' => $operationId, 'replayed' => false, 'applied' => $applied, 'items' => $items]);
+                return PlayerValuesLedger::view($userId, $config, $next, $now, ['operationId' => $operationId, 'replayed' => false, 'applied' => $applied, 'items' => $items, 'stacks' => $stacks]);
             } catch (PlayerValuesFailure $failure) {
                 $failure->state = PlayerValuesLedger::view($userId, $config, $state, $now);
                 throw $failure;
