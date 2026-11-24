@@ -41,6 +41,7 @@ class ItemStore
             if(!isset($r['s'])){$r['baseProperties']=(object)$r['baseProperties'];$out[]=$r;continue;}
             $base=$bases[$r['v']]??null;if($base===null||$base['key']!==$r['k'])ItemStorage::corrupt();
             $definition=['key'=>$r['k'],'name'=>$r['n'],'type'=>$r['t'],'rarity'=>$r['q'],'active'=>$r['a'],'baseProperties'=>$base['properties'],'propertyRules'=>ItemStorage::readRules(ItemStorage::binary($r['x']),$base['properties'])];
+            if(array_key_exists('m',$r)){$definition['mode']='stack';$definition['maxStack']=$r['m'];}
             $body=$definition;unset($body['key']);ItemRules::definition($definition['key'],$body);$definition['_basis']=$base;$out[]=$definition;
         }return $out;
     }
@@ -62,6 +63,7 @@ class ItemStore
         $sql=$this->mysql?'INSERT INTO item_template_storage(item_key,slot,version) VALUES(?,?,?) ON DUPLICATE KEY UPDATE version=VALUES(version)':'INSERT INTO item_template_storage(item_key,slot,version) VALUES(?,?,?) ON CONFLICT(item_key) DO UPDATE SET version=excluded.version';
         $this->pdo->prepare($sql)->execute([$definition['key'],$slot,$base['version']]);
         $r=['s'=>1,'k'=>$definition['key'],'n'=>$definition['name'],'t'=>$definition['type'],'q'=>$definition['rarity'],'a'=>$definition['active'],'v'=>$base['version'],'x'=>base64_encode(ItemStorage::rules($definition))];
+        if(($definition['mode']??'unique')==='stack')$r['m']=$definition['maxStack'];
         $sql=$this->mysql?'INSERT INTO item_templates(item_key,data) VALUES(?,?) ON DUPLICATE KEY UPDATE data=VALUES(data)':'INSERT INTO item_templates(item_key,data) VALUES(?,?) ON CONFLICT(item_key) DO UPDATE SET data=excluded.data';
         $this->pdo->prepare($sql)->execute([$definition['key'],json_encode($r,JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES)]);
     }
@@ -89,15 +91,15 @@ class ItemStore
     }
     public function inventory(string $user,bool $current=false):array{
         $q=$this->pdo->prepare('SELECT revision,data FROM player_items WHERE user_id=?'.$this->lock($current));$q->execute([$user]);$row=$q->fetch(PDO::FETCH_ASSOC);
-        if($row===false)return ['revision'=>0,'instances'=>[],'receipts'=>[],'evictedThroughMillis'=>0,'exists'=>false,'compact'=>true];
+        if($row===false)return ['revision'=>0,'instances'=>[],'stacks'=>[],'receipts'=>[],'evictedThroughMillis'=>0,'exists'=>false,'compact'=>true];
         $r=json_decode($row['data'],true,64,JSON_THROW_ON_ERROR);
-        if(!isset($r['s']))return ['revision'=>(int)$row['revision'],'exists'=>true,'compact'=>false]+ItemRules::decodeState($row['data']);
-        if($r['s']!==1||array_diff(array_keys($r),['s','i','g','e']))ItemStorage::corrupt();
-        return ['revision'=>(int)$row['revision'],'exists'=>true,'compact'=>true,'instances'=>$this->hydrate(ItemStorage::unpack(ItemStorage::binary($r['i'])),$current),'receipts'=>$r['g']??[],'evictedThroughMillis'=>$r['e']??0];
+        if(!isset($r['s']))return ['revision'=>(int)$row['revision'],'exists'=>true,'compact'=>false,'stacks'=>[]]+ItemRules::decodeState($row['data']);
+        if($r['s']!==1||array_diff(array_keys($r),['s','i','g','e','t']))ItemStorage::corrupt();
+        return ['revision'=>(int)$row['revision'],'exists'=>true,'compact'=>true,'instances'=>$this->hydrate(ItemStorage::unpack(ItemStorage::binary($r['i'])),$current),'stacks'=>ItemStorage::stacks($r['t']??[]),'receipts'=>$r['g']??[],'evictedThroughMillis'=>$r['e']??0];
     }
     public function saveInventory(string $user,array $before,array $next,bool $allowCreate,bool $migration=false):void{
         if(!$migration&&!($before['compact']??true))ItemStorage::required();
-        $r=['s'=>1,'i'=>base64_encode(ItemStorage::pack($next['instances']))];if($next['receipts'])$r['g']=array_values($next['receipts']);if($next['evictedThroughMillis']>0)$r['e']=$next['evictedThroughMillis'];$data=json_encode($r,JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
+        $r=['s'=>1,'i'=>base64_encode(ItemStorage::pack($next['instances']))];if($next['stacks']??[])$r['t']=ItemStorage::packStacks($next['stacks']);if($next['receipts'])$r['g']=array_values($next['receipts']);if($next['evictedThroughMillis']>0)$r['e']=$next['evictedThroughMillis'];$data=json_encode($r,JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
         if(!$before['exists']&&$allowCreate)$this->pdo->prepare('INSERT INTO player_items(user_id,revision,data) VALUES(?,?,?)')->execute([$user,$next['revision'],$data]);
         else{$q=$this->pdo->prepare('UPDATE player_items SET revision=?,data=? WHERE user_id=? AND revision=?');$q->execute([$next['revision'],$data,$user,$before['revision']]);if($q->rowCount()!==1)ItemRules::fail('REVISION_CONFLICT');}
         $this->references(ItemStorage::versions($before['instances']),ItemStorage::versions($next['instances']));

@@ -75,4 +75,26 @@ $values->configure(['definitions'=>$config['definitions'],'offers'=>[]],$values-
 check(4,operator(['player',$user])['inventory']['revision'],'Operator bounded inspection');
 foreach(['/items/grant','/admin/items/catalog']as$path){[$status]=api('POST',$path,['userId'=>$user],$session);check(404,$status,'No public grant/admin API');}
 [, $peerState]=api('GET','/items?userId='.$peer,null,$peerSession);check([],$peerState['instances'],'Player isolation');
+// TASK-1152 stacks over HTTP: operator stack template, paid grant, snapshot, equip/discard by itemKey.
+$catalogRevision=operator(['catalog'])['revision'];$potion=['name'=>'Potion','type'=>'consumable','rarity'=>'common','active'=>true,'baseProperties'=>(object)['heal'=>5],'propertyRules'=>[],'mode'=>'stack','maxStack'=>3];
+$stackEntry=operator(['put','potion',(string)$catalogRevision],json_encode($potion,JSON_THROW_ON_ERROR));check(['stack',3],[$stackEntry['definition']['mode'],$stackEntry['definition']['maxStack']],'Operator stack template');check(2500,$stackEntry['limits']['stacks'],'Stack slot limit');
+[, $catalogPage,$catalogRaw]=api('GET','/items/catalog?userId='.$user,null,$session);$byKey=array_column($catalogPage['definitions'],null,'key');check('stack',$byKey['potion']['mode'],'Catalog stack mode');check(false,array_key_exists('maxStack',$byKey['sword']),'Unique catalog shape unchanged');
+[$stackUser,$stackSession]=signup('StackPlayer');
+$values->configure(['definitions'=>$config['definitions'],'offers'=>[['key'=>'potions','name'=>'Potions','costs'=>[['key'=>'item_coin','amount'=>5]],'rewards'=>[],'itemRewards'=>[['itemKey'=>'potion','quantity'=>2]]]]],$values->config(false)['revision']);
+$potionBuy=static function()use($stackUser){return['userId'=>$stackUser,'offerKey'=>'potions','operationId'=>Database::nowMillis().':'.Database::uuid()];};
+[$status,$paid]=api('POST','/player-values/purchase',$potionBuy(),$stackSession);check(200,$status,'Stack purchase');check([['itemKey'=>'potion','quantity'=>2,'count'=>2]],$paid['operation']['stacks'],'Purchase operation stacks');check([],$paid['operation']['items'],'Items unique only');
+[$status,$full]=api('POST','/player-values/purchase',$potionBuy(),$stackSession);check(422,$status,'Full stack');check('STACK_LIMIT_REACHED',$full['code'],'Full stack code');
+[, $stackState]=api('GET','/items?userId='.$stackUser,null,$stackSession);check([['itemKey'=>'potion','count'=>2,'equipped'=>false]],$stackState['stacks'],'Snapshot stacks');check(95,$values->get($stackUser)['values'][0]['balance'],'Rejected stack purchase rolled back');
+$rev=$stackState['revision'];
+foreach([['instanceId'=>$id,'itemKey'=>'potion'],[]]as$target){[$status]=api('POST','/items/equip',['userId'=>$stackUser,'expectedRevision'=>$rev,'equipped'=>true]+$target,$stackSession);check(400,$status,'Exactly one target');}
+[$status]=api('POST','/items/discard',['userId'=>$stackUser,'instanceId'=>$id,'expectedRevision'=>$rev,'count'=>1],$stackSession);check(400,$status,'count with instanceId');
+[$status,$equippedStack]=api('POST','/items/equip',['userId'=>$stackUser,'itemKey'=>'potion','expectedRevision'=>$rev,'equipped'=>true],$stackSession);check(200,$status,'Equip stack');check(true,$equippedStack['stacks'][0]['equipped'],'Stack equipped');$rev++;
+[$status,$small]=api('POST','/items/discard',['userId'=>$stackUser,'itemKey'=>'potion','expectedRevision'=>$rev,'count'=>3],$stackSession);check(422,$status,'Stack too small');check('ITEM_STACK_TOO_SMALL',$small['code'],'Stack too small code');
+[$status]=api('POST','/items/discard',['userId'=>$stackUser,'itemKey'=>'potion','expectedRevision'=>$rev,'count'=>0],$stackSession);check(400,$status,'Discard count zero');
+[, $one]=api('POST','/items/discard',['userId'=>$stackUser,'itemKey'=>'potion','expectedRevision'=>$rev],$stackSession);check(1,$one['stacks'][0]['count'],'Discard default one');$rev++;
+[, $none]=api('POST','/items/discard',['userId'=>$stackUser,'itemKey'=>'potion','expectedRevision'=>$rev,'count'=>1],$stackSession);check([],$none['stacks'],'Empty stack removed');
+[$status,$missing]=api('POST','/items/equip',['userId'=>$stackUser,'itemKey'=>'potion','expectedRevision'=>$rev+1,'equipped'=>false],$stackSession);check(404,$status,'Removed stack');check('ITEM_NOT_FOUND',$missing['code'],'Removed stack code');
+$locked=$potion;$locked['mode']='unique';unset($locked['maxStack']);
+$pipes=[];$process=proc_open([PHP_BINARY,__DIR__.'/../bin/items.php','put','potion',(string)operator(['catalog'])['revision']],[0=>['pipe','r'],1=>['pipe','w'],2=>['pipe','w']],$pipes,dirname(__DIR__));fwrite($pipes[0],json_encode($locked));fclose($pipes[0]);stream_get_contents($pipes[1]);$lockError=json_decode(stream_get_contents($pipes[2]),true);fclose($pipes[1]);fclose($pipes[2]);
+check(1,proc_close($process),'Mode change refused by operator');check('ITEM_MODE_LOCKED',$lockError['code'],'Mode locked code');
 echo 'PASS: '.$passed." Items HTTP assertions, all5 app routes, actual local CLI, strict JSON/session/revisions, paid grant and original replay after discard/offer removal\n";

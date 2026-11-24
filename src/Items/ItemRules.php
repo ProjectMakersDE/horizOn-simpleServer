@@ -54,9 +54,25 @@ class ItemRules
         }
         if (strlen(self::canonical($properties)) > 256) self::invalid(); return $properties;
     }
-    public static function definition(string $key, $input): array
+    public const MAX_STACK = 999999;
+    public const DEFAULT_STACK = 99;
+    /** Requested mode, or null when absent (unchanged on update, unique on create). */
+    public static function mode($input): ?string
     {
-        self::key($key); $input = self::fields($input,['name','type','rarity','active','baseProperties','propertyRules']);
+        if ($input instanceof stdClass) $input = get_object_vars($input);
+        if (!is_array($input) || !array_key_exists('mode',$input)) return null;
+        if ($input['mode'] !== 'unique' && $input['mode'] !== 'stack') self::invalid(); return $input['mode'];
+    }
+    /** Unique definitions keep their original shape; only stack definitions carry mode and maxStack. */
+    public static function definition(string $key, $input, ?array $previous = null): array
+    {
+        self::key($key); $input = self::fields($input,['name','type','rarity','active','baseProperties','propertyRules','mode','maxStack']);
+        $mode = self::mode($input) ?? ($previous['mode'] ?? 'unique');
+        if ($mode === 'stack') {
+            $maxStack = self::integer(array_key_exists('maxStack',$input) ? $input['maxStack'] : ($previous['maxStack'] ?? self::DEFAULT_STACK),1,self::MAX_STACK);
+            // A stack has no per player values, so there is nothing a property rule could change.
+            if (self::list($input['propertyRules'] ?? null,16)) self::invalid();
+        } elseif (array_key_exists('maxStack',$input)) self::invalid();
         $properties = self::properties($input['baseProperties'] ?? null); $rules = []; $seen = [];
         foreach (self::list($input['propertyRules'] ?? null,16) as $row) {
             $row = self::fields($row,['key','min','max','maxChangePerCall']); $name = self::key($row['key'] ?? null);
@@ -67,6 +83,7 @@ class ItemRules
         }
         $definition = ['key'=>$key,'name'=>self::text($input['name'] ?? null,120),'type'=>self::key($input['type'] ?? null),
             'rarity'=>self::key($input['rarity'] ?? null),'active'=>self::boolean($input['active'] ?? null),'baseProperties'=>$properties,'propertyRules'=>$rules];
+        if ($mode === 'stack') { $definition['mode'] = 'stack'; $definition['maxStack'] = $maxStack; }
         if (strlen(self::canonical((object)$definition)) > 2048) self::invalid(); return $definition;
     }
     public static function rewards($items): array
