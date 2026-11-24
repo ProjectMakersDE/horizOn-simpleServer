@@ -1,3 +1,10 @@
+# [1.9.0](https://github.com/ProjectMakersDE/horizOn-simpleServer/compare/v1.8.0...v1.9.0) (2026-11-24)
+
+
+### Features
+
+* **items:** stack templates and stack inventory (TASK-1152) ([440c11a](https://github.com/ProjectMakersDE/horizOn-simpleServer/commit/440c11af3d22b3e45c9188ca74af1483ef36747d))
+
 # [1.8.0](https://github.com/ProjectMakersDE/horizOn-simpleServer/compare/v1.7.0...v1.8.0) (2026-11-16)
 
 
