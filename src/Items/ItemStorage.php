@@ -91,6 +91,17 @@ class ItemStorage
             $rules[]=['key'=>$keys[$slot],'min'=>self::read($bytes,$offset),'max'=>self::read($bytes,$offset),'maxChangePerCall'=>self::read($bytes,$offset)];}
         return $rules;
     }
+    /** Stacks are stored as [itemKey,count,equipped]; values always come from the template. */
+    public static function stacks($rows):array {
+        if(!is_array($rows)||($rows&&array_keys($rows)!==range(0,count($rows)-1)))self::corrupt();$stacks=[];$seen=[];
+        foreach($rows as $row){
+            if(!is_array($row)||array_keys($row)!==[0,1,2]||!is_string($row[0])||!preg_match('/^[a-z][a-z0-9_]{0,63}$/D',$row[0])||isset($seen[$row[0]])||!is_int($row[1])||$row[1]<1||$row[1]>ItemRules::MAX_STACK||!is_bool($row[2]))self::corrupt();
+            $seen[$row[0]]=true;$stacks[]=['itemKey'=>$row[0],'count'=>$row[1],'equipped'=>$row[2]];
+        }return $stacks;
+    }
+    public static function packStacks(array $stacks):array {
+        $rows=[];foreach($stacks as $stack)$rows[]=[$stack['itemKey'],$stack['count'],$stack['equipped']];self::stacks($rows);return $rows;
+    }
     public static function versions(array $items):array {
         $counts=[];foreach($items as $item)if(isset($item['_basis'])){$version=$item['_basis']['version'];$counts[$version]=($counts[$version]??0)+1;}return $counts;
     }

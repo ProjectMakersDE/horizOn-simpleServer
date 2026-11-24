@@ -61,7 +61,7 @@ class ItemMigration
             foreach([['player_items','user_id'],['market_listings','id']]as $target){[$table,$key]=$target;$after=null;
                 do{$q=$this->pdo->prepare('SELECT '.$key.',data FROM '.$table.($after===null?'':' WHERE '.$key.'>?').' ORDER BY '.$key.' LIMIT 50'.$this->lock());$q->execute($after===null?[]:[$after]);$rows=$q->fetchAll(PDO::FETCH_ASSOC);
                     foreach($rows as $row){$value=json_decode($row['data'],true,64,JSON_THROW_ON_ERROR);
-                        if($table==='player_items'){if(($value['s']??null)!==1||array_diff(array_keys($value),['s','i','g','e']))ItemStorage::required();$packed=$value['i'];}
+                        if($table==='player_items'){if(($value['s']??null)!==1||array_diff(array_keys($value),['s','i','g','e','t']))ItemStorage::required();$packed=$value['i'];}
                         else{if($value['item']===null)continue;if(($value['item']['s']??null)!==1||array_diff(array_keys($value['item']),['s','b']))ItemStorage::required();$packed=$value['item']['b'];}
                         foreach(ItemStorage::unpack(ItemStorage::binary($packed))as $item)if($item['_basis']['version']===$version)$references++;
                     }if($rows)$after=$rows[count($rows)-1][$key];

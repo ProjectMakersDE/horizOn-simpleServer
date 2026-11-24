@@ -1308,8 +1308,9 @@ SQL page overhead is not represented as MongoDB BSON or an invented per-row cons
 
 ## Items (self-hosted REST)
 
-Items are unique server-owned instances, such as a sword with durability. Stackable
-quantities remain Player Values, and display-only avatars/frames/badges remain
+Items are unique server-owned instances, such as a sword with durability, or
+stacks of a stack template (see "Item stacks" below). Currencies remain Player
+Values, and display-only avatars/frames/badges remain
 Player Profile. All five routes require the installation API key and the matching
 player Bearer session:
 
@@ -1318,10 +1319,10 @@ player Bearer session:
 | GET | `/api/v1/app/items` | `userId` |
 | GET | `/api/v1/app/items/catalog` | `userId`, optional `limit`1..50, `afterKey`, `catalogRevision` |
 | POST | `/api/v1/app/items/adjust` | `userId,instanceId,expectedRevision,changes:[{key,amount}]` |
-| POST | `/api/v1/app/items/equip` | `userId,instanceId,expectedRevision,equipped` |
-| POST | `/api/v1/app/items/discard` | `userId,instanceId,expectedRevision` |
+| POST | `/api/v1/app/items/equip` | `userId,instanceId` or `itemKey,expectedRevision,equipped` |
+| POST | `/api/v1/app/items/discard` | `userId,instanceId` or `itemKey,expectedRevision`, `count` (stack only) |
 
-Inventory responses contain `userId,revision,instances,limits,serverTime`. Each
+Inventory responses contain `userId,revision,instances,stacks,limits,serverTime`. Each
 instance contains `instanceId,itemKey,properties,equipped,createdAt`. Mutations
 replace the complete current snapshot. Keep the exact reviewed revision and item
 ID; after an uncertain result, read and reconcile rather than automatically
@@ -1384,6 +1385,35 @@ everything back. Value-only offers issue no item SQL. The first successful purch
 returns `items:[{instanceId,itemKey}]`. A replay returns empty `applied` and `items`,
 checks the retained PV guard before current offers/catalog and never recreates an
 already discarded item. Explicitly refresh inventory after confirmed purchase.
+
+### Item stacks (TASK-1152)
+
+A template body may carry `"mode":"stack"` and `"maxStack"` (1 to 999999, default
+99). The mode is set only when the template is created: a missing `mode` keeps it,
+a different one fails with 422 `ITEM_MODE_LOCKED`. `maxStack` on a unique template
+is 400 `INVALID_REQUEST`, and a stack template needs `"propertyRules":[]`. Its
+`baseProperties` are the static values of every stack. Catalog definitions carry
+`mode` and `maxStack` only for stack templates; unique definitions keep their old
+shape. `ITEMS_STACK_ENABLED` (default `true`) allows creating new stack templates;
+with `false`, creation fails with `ITEM_MODE_LOCKED` while existing stacks and
+template edits keep working.
+
+A player holds at most one stack per template: `stacks:[{itemKey,count,equipped}]`
+in every inventory snapshot. `limits.stacks` (operator variable `ITEMS_STACKS`,
+default 2500) bounds the number of stacks, while `limits.inventory` counts unique
+instances only. A stack `itemReward` raises the count by its quantity. A full stack
+(`maxStack`) or no free stack slot fails with 422 `STACK_LIMIT_REACHED` and rolls
+back the whole purchase. The purchase `operation.items` lists unique items only;
+`operation.stacks:[{itemKey,quantity,count}]` reports each stack grant with the new
+total (empty on replay).
+
+Equip and discard take exactly one of `instanceId` or `itemKey`. Discarding a stack
+takes `count` 1 to 999999 (default 1); more than the stack holds fails with 422
+`ITEM_STACK_TOO_SMALL`, and a stack that reaches 0 is removed. `count` together with
+`instanceId` is 400. `adjust` stays unique only. Stack templates cannot get a
+Marketplace price rule or enter escrow (422 `ITEM_NOT_TRADABLE`); Item Gifts send
+unique instances only. Stacks are stored inside the existing compact `player_items`
+document (field `t`), so no schema migration is needed.
 
 Storage keeps each immutable template basis once. An instance stores16 UUID bytes,
 8 basis-version bytes,8 creation-time bytes,1 flags byte and1 delta-count byte.

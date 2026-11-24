@@ -39,17 +39,26 @@ class ItemController
             return $service->adjust($user,ItemRules::uuid($body['instanceId'] ?? null),$body['expectedRevision'] ?? null,$body['changes'] ?? null);
         });
     }
+    /** Exactly one of instanceId (unique item) or itemKey (stack). */
+    private static function stackTarget(array $body): ?string
+    {
+        if (array_key_exists('instanceId',$body)===array_key_exists('itemKey',$body)) ItemRules::invalid();
+        return array_key_exists('itemKey',$body) ? ItemRules::key($body['itemKey']) : null;
+    }
     public static function equip(Request $request): void
     {
         self::action($request,true,static function ($service,$user,$body) {
-            $body=ItemRules::fields($body,['userId','instanceId','expectedRevision','equipped']);
+            $body=ItemRules::fields($body,['userId','instanceId','itemKey','expectedRevision','equipped']); $key=self::stackTarget($body);
+            if ($key!==null) return $service->equipStack($user,$key,$body['expectedRevision'] ?? null,$body['equipped'] ?? null);
             return $service->equip($user,ItemRules::uuid($body['instanceId'] ?? null),$body['expectedRevision'] ?? null,$body['equipped'] ?? null);
         });
     }
     public static function discard(Request $request): void
     {
         self::action($request,true,static function ($service,$user,$body) {
-            $body=ItemRules::fields($body,['userId','instanceId','expectedRevision']);
+            $body=ItemRules::fields($body,['userId','instanceId','itemKey','expectedRevision','count']); $key=self::stackTarget($body);
+            if ($key!==null) return $service->discardStack($user,$key,$body['expectedRevision'] ?? null,array_key_exists('count',$body) ? $body['count'] : 1);
+            if (array_key_exists('count',$body)) ItemRules::invalid();
             return $service->discard($user,ItemRules::uuid($body['instanceId'] ?? null),$body['expectedRevision'] ?? null);
         });
     }
